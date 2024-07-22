@@ -1,8 +1,11 @@
+use std::{fs, path::Path};
+
 use serde::{Serialize, Deserialize};
+use sysinfo::{System, Networks};
 
 #[derive(Serialize, Deserialize)]
-struct LogEntry {
-    timestamp: u64,
+pub struct LogEntry {
+    pub timestamp: u64,
     cpu_usage: f32,
     total_mem: u64,
     used_mem: u64,
@@ -13,16 +16,14 @@ struct LogEntry {
     bytes_out: u64,
     packets_in: u64,
     packets_out: u64,
-    perrors_in: u64,
-    perrors_out: u64,
-    uptime: u64,
     hostname: String,
-    component: String,
-    splunk_uptime: u64,
+    pub uptime: u64,
+    pub component: String,
+    pub splunk_uptime: u64,
 }
 
 impl LogEntry {
-    fn new(hostname: String, component: String, splunk_uptime: u64) -> Self {
+    pub fn new(hostname: String, component: String, splunk_uptime: u64) -> Self {
         Self {
             timestamp: 0,
             cpu_usage: 0.0,
@@ -35,8 +36,6 @@ impl LogEntry {
             bytes_out: 0,
             packets_in: 0,
             packets_out: 0,
-            perrors_in: 0,
-            perrors_out: 0,
             uptime: 0,
             hostname,
             component,
@@ -44,7 +43,7 @@ impl LogEntry {
         }
     }
 
-    fn reset(&mut self) {
+    pub fn reset(&mut self) {
         self.timestamp = 0;
         self.cpu_usage = 0.0;
         self.total_mem = 0;
@@ -56,19 +55,15 @@ impl LogEntry {
         self.bytes_out = 0;
         self.packets_in = 0;
         self.packets_out = 0;
-        self.perrors_in = 0;
-        self.perrors_out = 0;
         self.uptime = 0;
     }
 
-    fn update(&mut self, sys: &System, networks: &Networks) {
+    pub fn update(&mut self, sys: &System, networks: &Networks) {
         for (_interface_name, network) in networks {
             self.bytes_in += network.received();
             self.bytes_out += network.transmitted();
             self.packets_in += network.packets_received();
             self.packets_out += network.packets_transmitted();
-            self.perrors_in += network.errors_on_received();
-            self.perrors_out += network.errors_on_transmitted();
         }
 
         for process in sys.processes().values() {
@@ -86,16 +81,27 @@ impl LogEntry {
         self.mem_usage += used_mem as f32 / total_mem as f32 * 100.0;
     }
 
-    fn average(&mut self, interval: u64) {
+    pub fn average(&mut self, interval: u64) {
         self.bytes_in /= interval;
         self.bytes_out /= interval;
         self.packets_in /= interval;
         self.packets_out /= interval;
-        self.perrors_in /= interval;
-        self.perrors_out /= interval;
         self.cpu_usage /= interval as f32;
         self.mem_usage /= interval as f32;
         self.total_mem /= interval;
         self.used_mem /= interval;
+    }
+}
+
+pub fn check_log_file_size(log_path: &Path) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let metadata = fs::metadata(log_path).expect("Unable to get log file metadata");
+    let file_size = metadata.len();
+    if file_size > 10 * 1024 * 1024 {
+        fs::write(log_path, "").expect("Unable to clear log file");
+        println!("{timestamp} - log_level=\"INFO\" - module=\"hostagent_log\" - Hostagent log was rotated!");
     }
 }
