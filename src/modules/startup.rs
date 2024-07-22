@@ -1,4 +1,4 @@
-use std::{error::Error, net::IpAddr, path::Path};
+use std::{error::Error, fs, net::IpAddr, path::Path, process};
 use pnet::datalink::interfaces;
 use sysinfo::System;
 use serde::{Serialize, Deserialize};
@@ -30,6 +30,15 @@ fn create_stopswitch(switchpath: &Path) {
     let stopswitch_path = switchpath.join(".stopswitch");
     if !stopswitch_path.exists() {
         std::fs::File::create(&stopswitch_path).expect("Failed to create .stopswitch file");
+    }
+}
+
+pub fn check_stopswitch(switchpath: &Path) {    
+    let stopswitch_path = switchpath.join(".stopswitch");
+    if stopswitch_path.exists() {
+        fs::remove_file(&stopswitch_path).expect("Failed to remove .stopswitch file");
+        println!("Stopswitch file detected and removed. Exiting process.");
+        process::exit(0);
     }
 }
 

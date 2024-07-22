@@ -1,12 +1,13 @@
-use std::{env, fs::{self, OpenOptions}, path::{Path, PathBuf}, process, thread, time::Duration};
+use std::{fs::{self, OpenOptions}, io::BufWriter, path::Path, process};
 use std::io::Write;
 use gethostname::gethostname;
 mod modules {
     pub mod startup;
     pub mod config;
+    pub mod log_entry;
 }
 use procfs::process::all_processes;
-use sysinfo::{System, Pid};
+use sysinfo::{System, Networks, Pid};
 
 
 fn check_running_process(exe: &Path, pid: &u32) {
@@ -94,38 +95,77 @@ fn check_running_process(exe: &Path, pid: &u32) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let configmap = modules::config::get_configmap();
-
-    if args.len() > 1 {
-        if args[1] == "startup" {
-            let hostname = gethostname().to_string_lossy().to_string();
-            let startup_entry = modules::startup::startup_log(hostname, &configmap.root_folder, &configmap.app_folder);
-            let startup_path = configmap.root_folder.join(&configmap.location);
-            let startup_file = startup_path.join("startup_splunkd.log");
-
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(startup_file)
-                .expect("Failed to open PID file");
-            writeln!(file, "{}", startup_entry.unwrap()).expect("Failed to write to PID file");
-            process::exit(0);
-        } else if args[1] == "splunkagent" {
-            let current_pid = process::id();
-            check_running_process(&configmap.bin_folder, &current_pid);
-        }
-    } else {
+    if args.is_empty() {
         println!("No arguments provided");
         process::exit(1);
     }
-    loop {
-        println!("Sleepy");
-        thread::sleep(Duration::from_secs(1));
+
+    let configmap = modules::config::get_configmap(&args[1]);
+    let hostname = gethostname().to_string_lossy().to_string();
+
+    if args[1] == "startup" {
+        let startup_entry = modules::startup::startup_log(hostname, &configmap.root_folder, &configmap.app_folder);
+        let startup_path = configmap.root_folder.join(&configmap.location);
+        let startup_file = startup_path.join("startup_splunkd.log");
+
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(startup_file)
+            .expect("Failed to open PID file");
+        writeln!(file, "{}", startup_entry.unwrap()).expect("Failed to write to PID file");
+        process::exit(0);
+    } else if args[1] == "splunkagent" {
+        let current_pid = process::id();
+        check_running_process(&configmap.bin_folder, &current_pid);
     }
+    
+    
+    let component = String::from("splunkagent");
+    let mut sys = System::new_all();
+    let mut networks = Networks::new_with_refreshed_list();
+    let interval = configmap.interval;
+    let splunkagent_path = configmap.root_folder.join(&configmap.location);
+    let splunkagent_file = splunkagent_path.join("hostagent_splunkd.log");
 
-    
+    let splunkd_uptime = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .expect("Time went backwards")
+    .as_secs()-20;
 
+    let mut log_entry = modules::log_entry::LogEntry::new(hostname.clone(), component.clone(), splunkd_uptime);
+
+    let mut log_writer = BufWriter::new(OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(splunkagent_file.clone())
+        .expect("Failed to open log file"));
+
+        loop {
+            log_entry.reset();
+            log_entry.timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_secs();
+            log_entry.uptime = System::uptime();
     
+            for _ in 0..interval {
+                sys.refresh_all();
+                networks.refresh();
+                log_entry.update(&sys, &networks);
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+            
+            log_entry.average(interval);
     
+            serde_json::to_writer(&mut log_writer, &log_entry)
+                .expect("Failed to write to log file");
+            log_writer.write_all(b"\n").expect("Failed to write newline");
+            log_writer.flush().expect("Failed to flush log file");
+    
+            modules::startup::check_stopswitch(&configmap.bin_folder);
+            modules::log_entry::check_log_file_size(splunkagent_file.as_ref());
+        }
+
 }

@@ -1,6 +1,7 @@
 use std::{collections::HashMap, env, fs, path::{Path, PathBuf}, process};
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct ConfigEntry {
     pub log_type: String,
     pub location: String,
@@ -88,8 +89,10 @@ fn read_config_file(config_path: &Path) -> HashMap<String, HashMap<String, Strin
     config_data
 }
 
-pub fn get_configmap() -> ConfigEntry {
-    let (bin_folder, app_folder, root_folder) = get_app_dirs();
+pub fn get_configmap(module: &str) -> ConfigEntry {
+    match module {
+        "startup" | "splunkagent" | "diskstats" | "storewatch" => {
+            let (bin_folder, app_folder, root_folder) = get_app_dirs();
     let config_data = read_config_file(&app_folder);
     
     let default_type = String::from("file");
@@ -110,7 +113,7 @@ pub fn get_configmap() -> ConfigEntry {
 
     let default_interval = 10;
     let interval: u64 = config_data
-        .get("default")
+        .get(module)
         .and_then(|section| section.get("interval"))
         .and_then(|s| s.parse().ok())
         .unwrap_or(default_interval);
@@ -131,13 +134,21 @@ pub fn get_configmap() -> ConfigEntry {
         process::exit(1);
     }
 
-    let config_entry = ConfigEntry {
+    
+    ConfigEntry {
         log_type: config_type,
         location,
         interval,
         bin_folder,
         app_folder,
         root_folder,
-    };
-    config_entry
+    }
+        },
+        _ => {
+            eprintln!("Error: Invalid module '{}'. Valid modules are: startup, splunkagent, diskstats, storewatch", module);
+            process::exit(1);
+        }
+    }
+    
+    
 }
