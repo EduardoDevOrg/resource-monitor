@@ -22,7 +22,7 @@ fn get_splunk_version(splunk_root: &Path) -> String {
             .unwrap_or("");
         version_line.split('=').nth(1).unwrap_or("").to_string()
     } else {
-        String::new()
+        String::from("non_splunk")
     }
 }
 
