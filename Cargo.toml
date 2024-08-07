@@ -14,4 +14,4 @@ gethostname = "0.5.0"
 serde_json = "1.0.117"
 serde = { version = "1.0.203", features = ["derive"] }
 pnet = "0.35.0"
-
+if-addrs = "0.13.2"

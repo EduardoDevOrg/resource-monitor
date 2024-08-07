@@ -5,7 +5,9 @@ mod modules {
     pub mod startup;
     pub mod config;
     pub mod log_entry;
+    pub mod storewatch;
 }
+use std::env::consts::OS;
 use sysinfo::{System, Networks, Pid};
 
 
@@ -87,79 +89,101 @@ fn main() {
 
     let configmap = modules::config::get_configmap(&args[1]);
     let hostname = gethostname().to_string_lossy().to_string();
+    let running_module = &args[1];
 
-    if args[1] == "startup" {
-        let startup_entry = modules::startup::startup_log(hostname, &configmap.root_folder, &configmap.app_folder);
-        let startup_path = configmap.log_folder;
-        let startup_file = startup_path.join("startup_json.log");
-
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(startup_file)
-            .expect("Failed to open PID file");
-        writeln!(file, "{}", startup_entry.unwrap()).expect("Failed to write to PID file");
-        process::exit(0);
-    } else if args[1] == "agent" {
+    
+    if running_module == "agent" {
         let current_pid = process::id();
         check_running_process(&configmap.bin_folder, &current_pid);
     }
-    
-    
-    let component = String::from("agent");
-    let mut sys = System::new_all();
-    let mut networks = Networks::new_with_refreshed_list();
-    let interval = configmap.interval;
-    let agent_path = configmap.log_folder;
-    let agent_file = agent_path.join("hostagent_json.log");
 
-    let agent_uptime = std::time::SystemTime::now()
-    .duration_since(std::time::UNIX_EPOCH)
-    .expect("Time went backwards")
-    .as_secs()-20;
-
-    let mut log_entry = modules::log_entry::LogEntry::new(hostname.clone(), component.clone(), agent_uptime);
 
     if configmap.log_type == "file" {
-        let mut log_writer = BufWriter::new(OpenOptions::new()
-            .create(true)
-        .append(true)
-        .open(agent_file.clone())
-        .expect("Failed to open log file"));
+        if running_module == "agent" {
+            let mut sys = System::new_all();
+            let mut networks = Networks::new_with_refreshed_list();
+            let interval = configmap.interval;
+            let agent_path = configmap.log_folder;
+            let agent_file = agent_path.join("hostagent_json.log");
 
-        loop {
-            log_entry.timestamp = std::time::SystemTime::now()
+            let agent_uptime = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("Time went backwards")
-                .as_secs();
-            log_entry.uptime = System::uptime();
-    
-            for _ in 0..interval {
-                sys.refresh_all();
-                networks.refresh();
-                log_entry.update(&sys, &networks);
-                std::thread::sleep(std::time::Duration::from_secs(1));
-            }
+                .as_secs()-20;
             
-            log_entry.finalize(interval);
-    
-            log_entry.write_json(&mut log_writer).expect("Failed to write to log file");
+            let mut log_writer = BufWriter::new(OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(agent_file.clone())
+                .expect("Failed to open log file"));
+            let mut log_entry = modules::log_entry::LogEntry::new(hostname.clone(), running_module.clone(), agent_uptime);
 
-            log_writer.write_all(b"\n").expect("Failed to write newline");
-            log_writer.flush().expect("Failed to flush log file");
-            log_entry.reset();
+            loop {
+                log_entry.timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("Time went backwards")
+                    .as_secs();
+                log_entry.uptime = System::uptime();
+        
+                for _ in 0..interval {
+                    sys.refresh_all();
+                    networks.refresh();
+                    log_entry.update(&sys, &networks);
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+                
+                log_entry.finalize(interval);
+        
+                log_entry.write_json(&mut log_writer).expect("Failed to write to log file");
     
-            modules::startup::check_stopswitch(&configmap.bin_folder);
-            modules::log_entry::check_log_file_size(agent_file.as_ref());
+                log_writer.write_all(b"\n").expect("Failed to write newline");
+                log_writer.flush().expect("Failed to flush log file");
+                log_entry.reset();
+        
+                modules::startup::check_stopswitch(&configmap.bin_folder);
+                modules::log_entry::check_log_file_size(agent_file.as_ref());
+            }
+        } else if running_module == "startup" {
+            let mut startup_entry = modules::startup::StartupEntry::new(hostname.clone(), &configmap.root_folder);
+            let startup_string = modules::startup::startup_log(&hostname, &configmap.app_folder, &mut startup_entry);
+
+            let startup_path = configmap.log_folder;
+            let startup_file = startup_path.join("startup_json.log");
+
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(startup_file)
+                .expect("Failed to open PID file");
+            writeln!(file, "{}", startup_string.unwrap()).expect("Failed to write to PID file");
+            process::exit(0);
+        } else if running_module == "storewatch" {
+            todo!()
         }
+        
+        
+        
     } else if configmap.log_type == "udp" {
         let udp_host = configmap.host.clone();
         let udp_port = configmap.port;
         let socket = UdpSocket::bind("0.0.0.0:0").expect("Couldn't bind to address");
-    
-        loop {
-            log_entry.timestamp = std::time::SystemTime::now()
+        let add_wrapper = configmap.add_wrapper;
+
+        if running_module == "agent" {
+            let mut sys = System::new_all();
+            let mut networks = Networks::new_with_refreshed_list();
+            let interval = configmap.interval;
+
+            let agent_uptime = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_secs()-20;
+
+            let mut log_entry = modules::log_entry::LogEntry::new(hostname.clone(), running_module.clone(), agent_uptime);
+            
+            loop {
+                log_entry.timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("Time went backwards")
                 .as_secs();
@@ -173,22 +197,78 @@ fn main() {
             }
     
             log_entry.finalize(interval);
-    
-            let mut json_buffer = Vec::new();
-            log_entry.write_json(&mut json_buffer).expect("Failed to serialize log entry");
-            let json_string = String::from_utf8(json_buffer).expect("Failed to convert JSON buffer to string");
-    
+
+            let json_string = if add_wrapper {
+                log_entry.add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone())
+            } else {
+                let mut json_buffer = Vec::new();
+                log_entry.write_json(&mut json_buffer).expect("Failed to serialize log entry");
+                String::from_utf8(json_buffer).expect("Failed to convert JSON buffer to string")
+            };
+
             // Resolve the hostname to an IP address before each send
             let udp_address = format!("{}:{}", udp_host, udp_port);
             let resolved_address = udp_address.to_socket_addrs()
                 .expect("Failed to resolve hostname")
                 .next()
                 .expect("No addresses found for hostname");
-    
+
             socket.send_to(json_string.as_bytes(), resolved_address).expect("Failed to send UDP message");
             log_entry.reset();
             modules::startup::check_stopswitch(&configmap.bin_folder);
+            } 
+        } else if running_module == "startup" {
+            let mut startup_entry = modules::startup::StartupEntry::new(hostname.clone(), &configmap.root_folder);
+            let startup_string = modules::startup::startup_log(&hostname, &configmap.app_folder, &mut startup_entry);
+
+            let startup_data = if add_wrapper {
+                startup_entry.add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone())
+            } else {
+                startup_string.unwrap()
+            };
+
+            let udp_address = format!("{}:{}", udp_host, udp_port);
+            let resolved_address = udp_address.to_socket_addrs()
+                .expect("Failed to resolve hostname")
+                .next()
+                .expect("No addresses found for hostname");
+
+            socket.send_to(startup_data.as_bytes(), resolved_address)
+                .expect("Failed to send UDP message");
+
+            process::exit(0);
+        } else if running_module == "storewatch" {
+            let udp_address = format!("{}:{}", udp_host, udp_port);
+                let resolved_address = udp_address.to_socket_addrs()
+                    .expect("Failed to resolve hostname")
+                    .next()
+                    .expect("No addresses found for hostname");
+
+            if OS != "windows" {
+                let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
+                
+                if add_wrapper {
+                    for entry in storewatch_entry {
+                        let json_string = entry.add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone());
+                        socket.send_to(json_string.as_bytes(), resolved_address)
+                            .expect("Failed to send UDP message");
+                    }
+                } else {
+                    for entry in storewatch_entry {
+                        let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
+                        socket.send_to(json_string.as_bytes(), resolved_address)
+                            .expect("Failed to send UDP message");
+                    }
+                };
+
+                
+            } else {
+                // let mut storewatch_entry = modules::storewatch::Sto rewatchEntryWindows::new_windows(hostname.clone());
+            }
+
+            
+
         }
-    }
+    } 
 
 }

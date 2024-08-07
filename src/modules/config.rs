@@ -11,7 +11,13 @@ pub struct ConfigEntry {
     pub root_folder: PathBuf,
     pub host: String,
     pub port: u16,
+    pub api: String,
+    pub add_wrapper: bool,
+    pub index: String,
+    pub source: String,
+    pub sourcetype: String
 }
+
 fn get_app_dirs() -> (PathBuf, PathBuf, PathBuf) {
     let current_exe = env::current_exe().unwrap();
     let mut bin_folder = current_exe.clone();
@@ -105,6 +111,14 @@ fn read_config_file(config_path: &Path) -> HashMap<String, HashMap<String, Strin
     config_data
 }
 
+fn parse_bool(value: &str) -> Option<bool> {
+    match value.to_lowercase().as_str() {
+        "t" | "true" | "1" => Some(true),
+        "f" | "false" | "0" => Some(false),
+        _ => None,
+    }
+}
+
 pub fn get_configmap(module: &str) -> ConfigEntry {
     match module {
         "startup" | "agent" | "diskstats" | "storewatch" => {
@@ -134,6 +148,13 @@ pub fn get_configmap(module: &str) -> ConfigEntry {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(default_port);
 
+            let default_add_wrapper = false;
+            let add_wrapper: bool = config_data
+                .get("default")
+                .and_then(|section| section.get("add_wrapper"))
+                .and_then(|s| parse_bool(s))
+                .unwrap_or(default_add_wrapper);
+
             let default_interval = 10;
             let interval: u64 = config_data
                 .get(module)
@@ -141,12 +162,36 @@ pub fn get_configmap(module: &str) -> ConfigEntry {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(default_interval);
 
+            let default_index = String::from("_internal");
+            let index: String = config_data
+                .get(module)
+                .and_then(|section| section.get("index"))
+                .unwrap_or(&default_index)
+                .to_string();
+
+            let default_source = String::from("Resmonitor:JSON");
+            let source: String = config_data
+                .get(module)
+                .and_then(|section| section.get("source"))
+                .unwrap_or(&default_source)
+                .to_string();
+
+            let default_sourcetype = String::from("resmonitor_json");
+            let sourcetype: String = config_data
+                .get(module)
+                .and_then(|section| section.get("sourcetype"))
+                .unwrap_or(&default_sourcetype)
+                .to_string();
+
+
+
             let log_location: String;
             let mut log_folder = PathBuf::new(); // Initialize with a default value
             let mut host = String::new();
+            let mut api = String::new();
 
             if config_type == "file" {
-                if root_folder.to_string_lossy().contains("splunk") || root_folder.to_string_lossy().contains("splunkforwarder") {
+                if root_folder.to_string_lossy().contains("splunk") || root_folder.to_string_lossy().contains("splunkforwarder") || root_folder.to_string_lossy().contains("splunkuniversalforwarder") {
                     log_location = format!("{}/{}", root_folder.display(), location);
                     log_folder = PathBuf::from(&log_location);
                 } else {
@@ -163,10 +208,14 @@ pub fn get_configmap(module: &str) -> ConfigEntry {
                 process::exit(1);
             } else if config_type == "udp" {
                 host = location;
+            } else if config_type == "splunkapi" {
+                api = location;
             } else if config_type == "http" {
                 println!("HTTP type is not supported yet");
                 process::exit(1);
             }
+
+
 
             ConfigEntry {
                 log_type: config_type,
@@ -176,7 +225,12 @@ pub fn get_configmap(module: &str) -> ConfigEntry {
                 app_folder,
                 root_folder,
                 host,
-                port
+                port,
+                api,
+                add_wrapper,
+                index,
+                source,
+                sourcetype
             }
         },
         _ => {

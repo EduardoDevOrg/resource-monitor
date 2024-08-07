@@ -105,9 +105,22 @@ impl LogEntry {
         self.serialize(&mut serializer)
     }
 
-    
+    pub fn add_wrapper(&self, index: &str, source: &str, sourcetype: &str, host: String) -> String {
+        let log_entry_json = serde_json::to_string(self).expect("Failed to serialize log entry");
 
+        let wrapper = serde_json::json!({
+            "index": index,
+            "source": source,
+            "sourcetype": sourcetype,
+            "host": host,
+            "event": serde_json::from_str::<serde_json::Value>(&log_entry_json).expect("Failed to parse log entry JSON")
+        });
+
+        serde_json::to_string(&wrapper).expect("Failed to serialize wrapped log entry")
+    }
 }
+
+
 
 pub fn check_log_file_size(log_path: &Path) {
     let timestamp = std::time::SystemTime::now()
