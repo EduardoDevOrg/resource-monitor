@@ -263,7 +263,21 @@ fn main() {
 
                 
             } else {
-                // let mut storewatch_entry = modules::storewatch::Sto rewatchEntryWindows::new_windows(hostname.clone());
+                let storewatch_entry = modules::storewatch::get_storage_windows(&hostname);
+
+                if add_wrapper {
+                    for entry in storewatch_entry {
+                        let json_string = entry.add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone());
+                        socket.send_to(json_string.as_bytes(), resolved_address)
+                            .expect("Failed to send UDP message");
+                    }
+                } else {
+                    for entry in storewatch_entry {
+                        let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
+                        socket.send_to(json_string.as_bytes(), resolved_address)
+                            .expect("Failed to send UDP message");
+                    }
+                };   
             }
 
             

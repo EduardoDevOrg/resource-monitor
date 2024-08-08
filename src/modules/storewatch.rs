@@ -122,82 +122,34 @@ pub fn get_storage_linux(hostname: &str) -> Vec<StorewatchEntryLinux> {
     storage_entries
 }
 
-// pub fn get_storage_info(hostname: &str, storewatch_entry: &mut StorewatchEntry) -> Vec<serde_json::Value> {
-//     let disk_data = Disks::new_with_refreshed_list();
-//     let disks = disk_data.list();
+pub fn get_storage_windows(hostname: &str) -> Vec<StorewatchEntryWindows> {
+    let disk_data = Disks::new_with_refreshed_list();
+    let disks = disk_data.list();
 
-//     let timestamp = SystemTime::now()
-//         .duration_since(UNIX_EPOCH)
-//         .unwrap()
-//         .as_secs();
+    let timestamp_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("Time went backwards")
+        .as_secs();
 
-//     storewatch_entry.timestamp = timestamp;
-//     storewatch_entry.hostname = hostname.to_string();
-//     let mut disk_info = std::collections::HashMap::new();
-//     let mut disk_objects = Vec::new();
+        let mut storage_entries = Vec::new();
 
+        for disk in disks {
+            let total_size = disk.total_space();
+            let used_size = disk.total_space() - disk.available_space();
+            let free_size = disk.available_space();
+            let usage = (used_size as f64 / total_size as f64) * 100.0;
+            
+            let mut storage_entry = StorewatchEntryWindows::new_windows(hostname.to_string());
+            storage_entry.timestamp = timestamp_epoch;
+            storage_entry.partition_name = disk.name().to_string_lossy().to_string();
+            storage_entry.disk_name = disk.mount_point().to_string_lossy().to_string();
+            storage_entry.total_size = total_size;
+            storage_entry.free_size = free_size;
+            storage_entry.used_size = used_size;
+            storage_entry.disk_usage = usage;
 
-//         for disk in disks {
-//             let disk_name = disk.name().to_string_lossy().to_string();
-//             let mount_point = disk.mount_point().to_string_lossy().to_string();
-        
-//             let entry = disk_info.entry(disk_name.clone()).or_insert_with(|| {
-//                 let total_size = disk.total_space();
-//                 let available_size = disk.available_space();
-//                 let used_size = disk.total_space() - disk.available_space();
-//                 let disk_usage = (used_size as f64 / total_size as f64) * 100.0;
-        
-//                 let mut disk_details = std::collections::HashMap::new();
-//                 disk_details.insert("disk_name", serde_json::json!(disk_name));
-//                 disk_details.insert("total_size", serde_json::Value::Number(total_size.into()));
-//                 disk_details.insert("free_size", serde_json::Value::Number(available_size.into()));
-//                 disk_details.insert("used_size", serde_json::Value::Number(used_size.into()));
-//                 disk_details.insert("disk_usage", serde_json::Value::Number(serde_json::Number::from_f64(disk_usage).unwrap()));
-//                 disk_details.insert("mounts", serde_json::json!(Vec::<String>::new()));
-//                 disk_details
-//             });
-        
-//             let mounts = entry.get_mut("mounts").unwrap().as_array_mut().unwrap();
-//             mounts.push(serde_json::json!(mount_point));
-//         }
+            storage_entries.push(storage_entry);
+        }
 
-//         for (_, details) in disk_info.iter() {
-//             let mut disk_json = serde_json::Map::new();
-
-//             for (key, value) in details {
-//                 disk_json.insert(key.to_string(), serde_json::json!(value));
-//             }
-//             disk_objects.push(serde_json::Value::Object(disk_json));
-//         }
-    
-//         disk_objects
-        
-
-//     } else {
-//         for disk in disks {
-//             let total_size = disk.total_space();
-//             let used_size = disk.total_space() - disk.available_space();
-//             let usage = (used_size as f64 / total_size as f64) * 100.0;
-    
-//             let mut disk_map = HashMap::new();
-
-//             disk_map.insert(
-//                 "partition_name".to_string(),
-//                 disk.name().to_string_lossy().to_string(),
-//             );
-//             disk_map.insert(
-//                 "disk_name".to_string(),
-//                 disk.mount_point().to_string_lossy().to_string(),
-//             );
-//             disk_map.insert("total_size".to_string(), total_size.to_string());
-//             disk_map.insert("used_size".to_string(), used_size.to_string());
-//             disk_map.insert("usage".to_string(), format!("{:.2}", usage));
-    
-//             disk_info.push(disk_map);
-//         }
-    
-//         disk_info
-
-//     }
-
-// }
+        storage_entries
+}
