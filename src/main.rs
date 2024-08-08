@@ -9,7 +9,7 @@ mod modules {
 }
 use std::env::consts::OS;
 use sysinfo::{System, Networks, Pid};
-
+use reqwest::blocking::ClientBuilder;
 
 fn check_running_process(exe: &Path, current_pid: &u32) {
     let pid_file_path = exe.join(".agent.pid");
@@ -104,7 +104,7 @@ fn main() {
             let mut networks = Networks::new_with_refreshed_list();
             let interval = configmap.interval;
             let agent_path = configmap.log_folder;
-            let agent_file = agent_path.join("hostagent_json.log");
+            let agent_file = agent_path.join(configmap.file_name);
 
             let agent_uptime = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -148,7 +148,7 @@ fn main() {
             let startup_string = modules::startup::startup_log(&hostname, &configmap.app_folder, &mut startup_entry);
 
             let startup_path = configmap.log_folder;
-            let startup_file = startup_path.join("startup_json.log");
+            let startup_file = startup_path.join(configmap.file_name);
 
             let mut file = OpenOptions::new()
                 .write(true)
@@ -156,15 +156,44 @@ fn main() {
                 .truncate(true)
                 .open(startup_file)
                 .expect("Failed to open PID file");
+
             writeln!(file, "{}", startup_string.unwrap()).expect("Failed to write to PID file");
+            file.flush().expect("Failed to flush log file");
             process::exit(0);
         } else if running_module == "storewatch" {
-            todo!()
+            let storewatch_path = configmap.log_folder;
+            let storewatch_file = storewatch_path.join(configmap.file_name);
+
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(storewatch_file)
+                .expect("Failed to open storewatch log file");
+
+            if OS != "windows" {
+                let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
+                
+                for entry in storewatch_entry {
+                    let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
+                    writeln!(file, "{}", json_string).expect("Failed to write to log file");
+                }
+            } else {
+                let storewatch_entry = modules::storewatch::get_storage_windows(&hostname);
+
+                for entry in storewatch_entry {
+                    let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
+                    writeln!(file, "{}", json_string).expect("Failed to write to log file");
+                } 
+            }
+            file.flush().expect("Failed to flush log file");
+            process::exit(0);
         }
         
         
         
-    } else if configmap.log_type == "udp" {
+    } else if configmap.log_type == "udp" 
+    {
         let udp_host = configmap.host.clone();
         let udp_port = configmap.port;
         let socket = UdpSocket::bind("0.0.0.0:0").expect("Couldn't bind to address");
@@ -216,7 +245,8 @@ fn main() {
             socket.send_to(json_string.as_bytes(), resolved_address).expect("Failed to send UDP message");
             log_entry.reset();
             modules::startup::check_stopswitch(&configmap.bin_folder);
-            } 
+            }
+
         } else if running_module == "startup" {
             let mut startup_entry = modules::startup::StartupEntry::new(hostname.clone(), &configmap.root_folder);
             let startup_string = modules::startup::startup_log(&hostname, &configmap.app_folder, &mut startup_entry);
@@ -283,6 +313,94 @@ fn main() {
             
 
         }
-    } 
+    } else if configmap.log_type == "splunkapi" 
+    {
+        let client = ClientBuilder::new()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .expect("Failed to build client");
+        let api_url = &configmap.api;
+
+        if running_module == "agent" {
+            let mut sys = System::new_all();
+            let mut networks = Networks::new_with_refreshed_list();
+            let interval = configmap.interval;
+
+            let params = [
+            ("source", configmap.source.as_str()),
+            ("sourcetype", configmap.sourcetype.as_str()),
+            ("index", configmap.index.as_str()),
+            ("host", hostname.as_str()),
+            ];
+
+            let agent_uptime = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_secs()-20;
+
+            let mut log_entry = modules::log_entry::LogEntry::new(hostname.clone(), running_module.clone(), agent_uptime);
+
+            loop {
+                log_entry.timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_secs();
+                log_entry.uptime = System::uptime();
+    
+                for _ in 0..interval {
+                    sys.refresh_all();
+                    networks.refresh();
+                    log_entry.update(&sys, &networks);
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+    
+                log_entry.finalize(interval);
+                let mut json_buffer = Vec::new();
+                log_entry.write_json(&mut json_buffer).expect("Failed to serialize log entry");
+                let payload = String::from_utf8(json_buffer).expect("Failed to convert JSON buffer to string");
+                
+                match client.post(api_url)
+                .query(&params)
+                .body(payload)
+                .timeout(std::time::Duration::from_secs(5))
+                .send() {
+                    Ok(_) => {
+                    }
+                Err(err) => {
+                    eprintln!("Error sending request: {} stat", err);
+                }
+            }
+                log_entry.reset();
+                modules::startup::check_stopswitch(&configmap.bin_folder);
+            }
+
+        } else if running_module == "startup" {
+            let params = [
+            ("source", configmap.source.as_str()),
+            ("sourcetype", configmap.sourcetype.as_str()),
+            ("index", configmap.index.as_str()),
+            ("host", hostname.as_str()),
+            ];
+
+            let mut startup_entry = modules::startup::StartupEntry::new(hostname.clone(), &configmap.root_folder);
+            let startup_string = modules::startup::startup_log(&hostname, &configmap.app_folder, &mut startup_entry);
+
+            let payload = startup_string.unwrap();
+
+            match client.post(api_url)
+            .query(&params)
+            .body(payload)
+            .timeout(std::time::Duration::from_secs(5))
+            .send() {
+                Ok(_) => {
+                }
+                Err(err) => {
+                    eprintln!("Error sending request: {} stat", err);
+                }
+            }
+            process::exit(0);
+        }
+
+    }
 
 }

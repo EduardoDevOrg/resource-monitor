@@ -5,6 +5,7 @@ use std::{collections::HashMap, env, fs, path::{Path, PathBuf}, process};
 pub struct ConfigEntry {
     pub log_type: String,
     pub log_folder: PathBuf,
+    pub file_name: String,
     pub interval: u64,
     pub bin_folder: PathBuf,
     pub app_folder: PathBuf,
@@ -183,7 +184,12 @@ pub fn get_configmap(module: &str) -> ConfigEntry {
                 .unwrap_or(&default_sourcetype)
                 .to_string();
 
-
+            let default_file_name = String::from("resmonitor_json.log");
+            let file_name: String = config_data
+                .get(module)
+                .and_then(|section| section.get("file_name"))
+                .unwrap_or(&default_file_name)
+                .to_string();
 
             let log_location: String;
             let mut log_folder = PathBuf::new(); // Initialize with a default value
@@ -220,6 +226,7 @@ pub fn get_configmap(module: &str) -> ConfigEntry {
             ConfigEntry {
                 log_type: config_type,
                 log_folder,
+                file_name,
                 interval,
                 bin_folder,
                 app_folder,
