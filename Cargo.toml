@@ -17,9 +17,8 @@ pnet = "0.35.0"
 if-addrs = "0.13.2"
 reqwest = { version = "0.12.1", features = ["blocking", "json"] }
 
-[target.'cfg(windows)'.dependencies]
+[target.x86_64-pc-windows-msvc.dependencies]
 openssl = { version = "0.10.66", features = ["vendored"] }
-
 
 [target.'cfg(unix)'.dependencies]
 openssl = { version = "0.10.66", features = ["vendored"] }
