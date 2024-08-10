@@ -291,7 +291,6 @@ fn main() {
                     }
                 };
 
-                
             } else {
                 let storewatch_entry = modules::storewatch::get_storage_windows(&hostname);
 
@@ -397,6 +396,52 @@ fn main() {
                 Err(err) => {
                     eprintln!("Error sending request: {} stat", err);
                 }
+            }
+            process::exit(0);
+        } else if running_module == "storewatch" {
+            let params = [
+            ("source", configmap.source.as_str()),
+            ("sourcetype", configmap.sourcetype.as_str()),
+            ("index", configmap.index.as_str()),
+            ("host", hostname.as_str()),
+            ];
+
+            if OS != "windows" {
+                let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
+                
+                for entry in storewatch_entry {
+                    let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
+                    let payload = json_string;
+                    match client.post(api_url)
+                    .query(&params)
+                    .body(payload)
+                    .timeout(std::time::Duration::from_secs(5))
+                    .send() {
+                        Ok(_) => {
+                        }
+                        Err(err) => {
+                            eprintln!("Error sending request: {} stat", err);
+                        }
+                    }
+                }
+            } else {
+                let storewatch_entry = modules::storewatch::get_storage_windows(&hostname);
+
+                for entry in storewatch_entry {
+                    let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
+                    let payload = json_string;
+                    match client.post(api_url)
+                    .query(&params)
+                    .body(payload)
+                    .timeout(std::time::Duration::from_secs(5))
+                    .send() {
+                        Ok(_) => {
+                        }
+                        Err(err) => {
+                            eprintln!("Error sending request: {} stat", err);
+                        }
+                    }
+                } 
             }
             process::exit(0);
         }
