@@ -38,7 +38,14 @@ pub fn get_app_dirs() -> (PathBuf, PathBuf, PathBuf) {
         root_folder.push(component);
     }
 
-    (bin_folder, app_folder, root_folder)
+    if root_folder.to_string_lossy().contains("splunk") || root_folder.to_string_lossy().contains("splunkforwarder") || root_folder.to_string_lossy().contains("splunkuniversalforwarder") {
+        (bin_folder, app_folder, root_folder)
+    } else {
+        root_folder = root_folder.parent().unwrap().to_path_buf();
+        (bin_folder, app_folder, root_folder)
+    }
+
+    
 }
 
 fn read_file(path: &Path, last_modified_time: &mut std::time::SystemTime) -> HashMap<String, HashMap<String, String>>{
@@ -81,21 +88,21 @@ fn read_file(path: &Path, last_modified_time: &mut std::time::SystemTime) -> Has
 
 fn visit_dirs(dir: &Path, module: &str) -> Option<PathBuf> {
 
-    if module == "agent" {
+    if module == "agent" || module == "storewatch" || module == "startup" {
         // Search in the provided directory
-    let conf_path = dir.join(format!("{}.conf", module));
+    let conf_path = dir.join("agent.conf");
     if conf_path.exists() {
         return Some(conf_path);
     }
 
     // Go one directory up and search in `default` or `local`
     if let Some(parent_dir) = dir.parent() {
-        let default_dir = parent_dir.join("default").join(format!("{}.conf", module));
+        let default_dir = parent_dir.join("default").join("agent.conf");
         if default_dir.exists() {
             return Some(default_dir);
         }
 
-        let local_dir = parent_dir.join("local").join(format!("{}.conf", module));
+        let local_dir = parent_dir.join("local").join("agent.conf");
         if local_dir.exists() {
             return Some(local_dir);
         }
@@ -280,7 +287,6 @@ pub fn get_configmap(module: &str) -> ConfigEntry {
                 ));
                 process::exit(1);
             }
-
 
             ConfigEntry {
                 log_type: config_type,
