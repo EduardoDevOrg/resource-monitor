@@ -4,6 +4,8 @@ use serde_json::ser::Formatter;
 use sysinfo::{System, Networks};
 use std::io::Write;
 
+use super::logging::agent_logger;
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LogEntry {
     pub timestamp: u64,
@@ -123,14 +125,13 @@ impl LogEntry {
 
 
 pub fn check_log_file_size(log_path: &Path) {
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
     let metadata = fs::metadata(log_path).expect("Unable to get log file metadata");
     let file_size = metadata.len();
     if file_size > 10 * 1024 * 1024 {
         fs::write(log_path, "").expect("Unable to clear log file");
-        println!("{timestamp} - log_level=\"INFO\" - module=\"hostagent_log\" - Hostagent log was rotated!");
+        agent_logger("info", "check_log_file_size", 
+        r#"{
+                "message": "Agent log was rotated!"
+            }"#);
     }
 }

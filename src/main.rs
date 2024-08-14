@@ -1,11 +1,13 @@
 use std::{fs::{self, OpenOptions}, io::BufWriter, net::{ToSocketAddrs, UdpSocket}, path::Path, process};
 use std::io::Write;
 use gethostname::gethostname;
+use modules::config::get_splunk_hostname;
 mod modules {
     pub mod startup;
     pub mod config;
     pub mod log_entry;
     pub mod storewatch;
+    pub mod logging;
 }
 use std::env::consts::OS;
 use sysinfo::{System, Networks, Pid};
@@ -15,6 +17,15 @@ fn check_running_process(exe: &Path, current_pid: &u32) {
     let pid_file_path = exe.join(".agent.pid");
     let executable = std::env::current_exe().unwrap();
     let pid_file = pid_file_path.to_str().unwrap();
+    modules::logging::agent_logger("debug", "check_process", 
+    &format!(
+        r#"{{
+            "message": "Checking for running process",
+            "exe": "{}",
+            "current_pid": {}
+        }}"#,
+        executable.display(), current_pid
+    ));
 
     let mut system = System::new_all();
     system.refresh_all();
@@ -44,7 +55,14 @@ fn check_running_process(exe: &Path, current_pid: &u32) {
         if let Some((oldest_pid, _)) = matching_processes.into_iter()
             .min_by_key(|&(pid, start_time)| (start_time, pid)) 
         {
-            println!("Found running process with PID: {}", oldest_pid);
+            modules::logging::agent_logger("info", "check_process", 
+            &format!(
+                r#"{{
+                    "message": "Found running process with PID",
+                    "pid": {}
+                }}"#,
+                oldest_pid
+            ));
             writeln!(file, "{}", oldest_pid).expect("Failed to write to PID file");
             process::exit(0);
         } else {
@@ -62,10 +80,24 @@ fn check_running_process(exe: &Path, current_pid: &u32) {
         };
 
         if system.process(Pid::from_u32(old_pid)).is_some() {
-            println!("Process with PID {} is running", old_pid);
+            modules::logging::agent_logger("info", "check_process", 
+            &format!(
+                r#"{{
+                    "message": "Process with PID {} is running",
+                    "pid": {}
+                }}"#,
+                old_pid, old_pid
+            ));
             process::exit(0);
         } else {
-            println!("Process with PID {} is not running", old_pid);
+            modules::logging::agent_logger("info", "check_process", 
+            &format!(
+                r#"{{
+                    "message": "Process with PID {} is not running",
+                    "pid": {}
+                }}"#,
+                old_pid, old_pid
+            ));
             let mut file = OpenOptions::new()
                 .write(true)
                 .truncate(true)
@@ -73,7 +105,14 @@ fn check_running_process(exe: &Path, current_pid: &u32) {
                 .expect("Failed to open PID file");
             let current_pid = process::id();
             writeln!(file, "{}", current_pid).expect("Failed to write to PID file");
-            println!("PID {} is written to file.", current_pid);
+            modules::logging::agent_logger("info", "check_process", 
+            &format!(
+                r#"{{
+                    "message": "PID {} is written to file.",
+                    "pid": {}
+                }}"#,
+                current_pid, current_pid
+            ));
         }
     }
 }   
@@ -82,15 +121,26 @@ fn check_running_process(exe: &Path, current_pid: &u32) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.is_empty() {
-        println!("No arguments provided");
+    if args.len() < 2 {
+        modules::logging::agent_logger("error", "main", 
+        r#"{
+                "message": "No arguments provided"
+            }"#);
+        println!("No arguments provided!\n
+        Possible arguments are: agent, startup, storewatch");
         process::exit(1);
     }
 
     let configmap = modules::config::get_configmap(&args[1]);
-    let hostname = gethostname().to_string_lossy().to_string();
+    let mut hostname = get_splunk_hostname(&configmap.root_folder);
+    if hostname == "no_host" {
+        hostname = gethostname().to_string_lossy().to_string();
+    }
+    
     let running_module = &args[1];
 
+
+    
     
     if running_module == "agent" {
         let current_pid = process::id();
@@ -366,7 +416,14 @@ fn main() {
                     Ok(_) => {
                     }
                 Err(err) => {
-                    eprintln!("Error sending request: {} stat", err);
+                    modules::logging::agent_logger("error", "agent", 
+                    &format!(
+                        r#"{{
+                            "message": "Error sending request",
+                            "error": "{}"
+                        }}"#,
+                        err
+                    ));
                 }
             }
                 log_entry.reset();
@@ -394,7 +451,14 @@ fn main() {
                 Ok(_) => {
                 }
                 Err(err) => {
-                    eprintln!("Error sending request: {} stat", err);
+                    modules::logging::agent_logger("error", "startup", 
+                    &format!(
+                        r#"{{
+                            "message": "Error sending request",
+                            "error": "{}"
+                        }}"#,
+                        err
+                    ));
                 }
             }
             process::exit(0);
@@ -420,7 +484,14 @@ fn main() {
                         Ok(_) => {
                         }
                         Err(err) => {
-                            eprintln!("Error sending request: {} stat", err);
+                            modules::logging::agent_logger("error", "storewatch", 
+                            &format!(
+                                r#"{{
+                                    "message": "Error sending request",
+                                    "error": "{}"
+                                }}"#,
+                                err
+                            ));
                         }
                     }
                 }
@@ -438,7 +509,14 @@ fn main() {
                         Ok(_) => {
                         }
                         Err(err) => {
-                            eprintln!("Error sending request: {} stat", err);
+                            modules::logging::agent_logger("error", "storewatch", 
+                            &format!(
+                                r#"{{
+                                    "message": "Error sending request",
+                                    "error": "{}"
+                                }}"#,
+                                err
+                            ));
                         }
                     }
                 } 

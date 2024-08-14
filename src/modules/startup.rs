@@ -2,6 +2,7 @@ use std::{error::Error, fs, net::IpAddr, path::Path, process};
 use sysinfo::System;
 use serde::{Serialize, Deserialize};
 use if_addrs::get_if_addrs;
+use super::logging::agent_logger;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct StartupEntry {
@@ -66,6 +67,11 @@ fn get_instance_id(splunk_root: &Path) -> String {
                 return line.split('=').nth(1).unwrap().trim().to_string();
             }
         }
+        agent_logger("error", "get_instance_id", 
+        r#"{
+                "message": "No instance ID found in instance.cfg",
+                "module": "startup"
+            }"#);
         String::from("non_splunk")
     } else {
         String::from("non_splunk")
@@ -83,7 +89,11 @@ pub fn check_stopswitch(switchpath: &Path) {
     let stopswitch_path = switchpath.join(".stopswitch");
     if stopswitch_path.exists() {
         fs::remove_file(&stopswitch_path).expect("Failed to remove .stopswitch file");
-        println!("Stopswitch file detected and removed. Exiting process.");
+        agent_logger("info", "check_stopswitch", 
+        r#"{
+                "message": "Stopswitch file detected and removed. Exiting process.",
+                "module": "startup"
+            }"#);
         process::exit(0);
     }
 }

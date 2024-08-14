@@ -1,5 +1,7 @@
 use std::{collections::HashMap, env, fs, path::{Path, PathBuf}, process};
 
+use super::logging::agent_logger;
+
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct ConfigEntry {
@@ -19,7 +21,7 @@ pub struct ConfigEntry {
     pub sourcetype: String
 }
 
-fn get_app_dirs() -> (PathBuf, PathBuf, PathBuf) {
+pub fn get_app_dirs() -> (PathBuf, PathBuf, PathBuf) {
     let current_exe = env::current_exe().unwrap();
     let mut bin_folder = current_exe.clone();
     let mut app_folder = current_exe.clone();
@@ -77,39 +79,83 @@ fn read_file(path: &Path, last_modified_time: &mut std::time::SystemTime) -> Has
     config_data
 }
 
-fn visit_dirs(dir: &Path) -> Option<PathBuf> {
-    // Search in the provided directory
-    let agent_conf_path = dir.join("agent.conf");
-    if agent_conf_path.exists() {
-        return Some(agent_conf_path);
+fn visit_dirs(dir: &Path, module: &str) -> Option<PathBuf> {
+
+    if module == "agent" {
+        // Search in the provided directory
+    let conf_path = dir.join(format!("{}.conf", module));
+    if conf_path.exists() {
+        return Some(conf_path);
     }
 
     // Go one directory up and search in `default` or `local`
     if let Some(parent_dir) = dir.parent() {
-        let default_dir = parent_dir.join("default").join("agent.conf");
+        let default_dir = parent_dir.join("default").join(format!("{}.conf", module));
         if default_dir.exists() {
             return Some(default_dir);
         }
 
-        let local_dir = parent_dir.join("local").join("agent.conf");
+        let local_dir = parent_dir.join("local").join(format!("{}.conf", module));
         if local_dir.exists() {
             return Some(local_dir);
         }
     }
 
     // If no file is found, print a message and return None
-    println!("No agent.conf found");
+    agent_logger("debug", "visit_dirs", 
+    &format!( 
+        r#"{{
+            "message": "No configuration file found for module '{}' in '{}' or '{}' or '{}'",
+            "module": "{}"
+        }}"#,
+        module, dir.to_string_lossy(), dir.parent().unwrap().to_string_lossy(), dir.parent().unwrap().parent().unwrap().to_string_lossy(), module
+    ));
     None
+    } else {
+        Some(dir.to_path_buf())
+    }
 }
 
-fn read_config_file(config_path: &Path) -> HashMap<String, HashMap<String, String>> {
+fn get_config_path(config_path: &Path, module: &str) -> HashMap<String, HashMap<String, String>> {
     let mut config_data = HashMap::new();
-    let config_path = visit_dirs(config_path);
+    let config_path = visit_dirs(config_path, module);
     let mut last_modified_time = std::time::SystemTime::UNIX_EPOCH;
     if let Some(config_path) = config_path {
         config_data = read_file(&config_path, &mut last_modified_time);
     }
     config_data
+}
+
+pub fn get_splunk_hostname(splunk_root: &Path) -> String {
+    if splunk_root.to_string_lossy().contains("splunk") || splunk_root.to_string_lossy().contains("splunkforwarder") || splunk_root.to_string_lossy().contains("splunkuniversalforwarder") {
+        let inputs_conf = splunk_root.join("etc").join("system").join("local").join("inputs.conf");
+        let server_conf = splunk_root.join("etc").join("system").join("local").join("server.conf");
+
+        if inputs_conf.exists() {
+            let inputs_conf_data = get_config_path(&inputs_conf, "inputs");
+            if let Some(hostname) = inputs_conf_data.get("default").and_then(|section| section.get("host")) {
+                return hostname.to_string();
+            }
+        }
+
+        if server_conf.exists() {
+            let server_conf_data = get_config_path(&server_conf, "server");
+            if let Some(hostname) = server_conf_data.get("general").and_then(|section| section.get("serverName")) {
+                return hostname.to_string();
+            }
+        }
+        agent_logger("debug", "get_splunk_hostname", 
+        &format!( 
+            r#"{{
+                "message": "No hostname found in inputs.conf or server.conf",
+                "module": "{}"
+            }}"#,
+            "agent"
+        ));
+        String::from("no_host")
+    } else {
+        String::from("no_host")
+    }
 }
 
 fn parse_bool(value: &str) -> Option<bool> {
@@ -122,10 +168,10 @@ fn parse_bool(value: &str) -> Option<bool> {
 
 pub fn get_configmap(module: &str) -> ConfigEntry {
     match module {
-        "startup" | "agent" | "diskstats" | "storewatch" => {
+        "startup" | "agent" | "storewatch" => {
             let (bin_folder, app_folder, root_folder) = get_app_dirs();
 
-            let config_data = read_config_file(&bin_folder);
+            let config_data = get_config_path(&bin_folder, module);
             
             let default_type = String::from("file");
             let config_type = config_data
@@ -210,17 +256,30 @@ pub fn get_configmap(module: &str) -> ConfigEntry {
                 }
 
             } else if config_type == "tcp" {
-                println!("TCP type is not supported yet");
+                agent_logger("error", "get_configmap", 
+                &format!( 
+                    r#"{{
+                        "message": "TCP type is not supported yet",
+                        "module": "{}"
+                    }}"#,
+                    module
+                ));
                 process::exit(1);
             } else if config_type == "udp" {
                 host = location;
             } else if config_type == "splunkapi" {
                 api = location;
             } else if config_type == "http" {
-                println!("HTTP type is not supported yet");
+                agent_logger("error", "get_configmap", 
+                &format!( 
+                    r#"{{
+                        "message": "HTTP type is not supported yet",
+                        "module": "{}"
+                    }}"#,
+                    module
+                ));
                 process::exit(1);
             }
-
 
 
             ConfigEntry {
@@ -239,9 +298,16 @@ pub fn get_configmap(module: &str) -> ConfigEntry {
                 source,
                 sourcetype
             }
+            
         },
         _ => {
-            eprintln!("Error: Invalid module '{}'. Valid modules are: startup, agent, diskstats, storewatch", module);
+            agent_logger("error", "get_configmap", 
+            &format!( 
+                r#"{{
+                    "message": "Invalid module '{}'. Valid modules are: startup, agent, storewatch"
+                }}"#,
+                module
+            ));
             process::exit(1);
         }
     }
