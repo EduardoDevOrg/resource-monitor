@@ -1,4 +1,4 @@
-use std::{fs::{self, OpenOptions}, io::BufWriter, net::{ToSocketAddrs, UdpSocket}, path::Path, process};
+use std::{fs::{self, OpenOptions}, io::BufWriter, net::{TcpStream, ToSocketAddrs, UdpSocket}, path::Path, process};
 use std::io::Write;
 use gethostname::gethostname;
 use modules::config::get_splunk_hostname;
@@ -361,6 +361,110 @@ fn main() {
 
             
 
+        }
+    } else if configmap.log_type == "tcp" 
+    {
+        {
+            let tcp_host = configmap.host.clone();
+            let tcp_port = configmap.port;
+            let add_wrapper = configmap.add_wrapper;
+    
+            if running_module == "agent" {
+                let mut sys = System::new_all();
+                let mut networks = Networks::new_with_refreshed_list();
+                let interval = configmap.interval;
+    
+                let agent_uptime = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("Time went backwards")
+                    .as_secs()-20;
+    
+                let mut log_entry = modules::log_entry::LogEntry::new(hostname.clone(), running_module.clone(), agent_uptime);
+                
+                loop {
+                    log_entry.timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("Time went backwards")
+                    .as_secs();
+                    log_entry.uptime = System::uptime();
+        
+                    for _ in 0..interval {
+                        sys.refresh_all();
+                        networks.refresh();
+                        log_entry.update(&sys, &networks);
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                    }
+        
+                    log_entry.finalize(interval);
+    
+                    let json_string = if add_wrapper {
+                        log_entry.add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone())
+                    } else {
+                        let mut json_buffer = Vec::new();
+                        log_entry.write_json(&mut json_buffer).expect("Failed to serialize log entry");
+                        String::from_utf8(json_buffer).expect("Failed to convert JSON buffer to string")
+                    };
+    
+                    // Connect to the TCP server
+                    let tcp_address = format!("{}:{}", tcp_host, tcp_port);
+                    let mut stream = TcpStream::connect(tcp_address).expect("Failed to connect to TCP server");
+    
+                    stream.write_all(json_string.as_bytes()).expect("Failed to send TCP message");
+                    log_entry.reset();
+                    modules::startup::check_stopswitch(&configmap.bin_folder);
+                }
+    
+            } else if running_module == "startup" {
+                let mut startup_entry = modules::startup::StartupEntry::new(hostname.clone(), &configmap.root_folder);
+                let startup_string = modules::startup::startup_log(&hostname, &configmap.app_folder, &mut startup_entry);
+    
+                let startup_data = if add_wrapper {
+                    startup_entry.add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone())
+                } else {
+                    startup_string.unwrap()
+                };
+    
+                let tcp_address = format!("{}:{}", tcp_host, tcp_port);
+                let mut stream = TcpStream::connect(tcp_address).expect("Failed to connect to TCP server");
+    
+                stream.write_all(startup_data.as_bytes()).expect("Failed to send TCP message");
+    
+                process::exit(0);
+            } else if running_module == "storewatch" {
+                let tcp_address = format!("{}:{}", tcp_host, tcp_port);
+                let mut stream = TcpStream::connect(tcp_address).expect("Failed to connect to TCP server");
+    
+                if OS != "windows" {
+                    let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
+                    
+                    if add_wrapper {
+                        for entry in storewatch_entry {
+                            let json_string = entry.add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone());
+                            stream.write_all(json_string.as_bytes()).expect("Failed to send TCP message");
+                        }
+                    } else {
+                        for entry in storewatch_entry {
+                            let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
+                            stream.write_all(json_string.as_bytes()).expect("Failed to send TCP message");
+                        }
+                    };
+    
+                } else {
+                    let storewatch_entry = modules::storewatch::get_storage_windows(&hostname);
+    
+                    if add_wrapper {
+                        for entry in storewatch_entry {
+                            let json_string = entry.add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone());
+                            stream.write_all(json_string.as_bytes()).expect("Failed to send TCP message");
+                        }
+                    } else {
+                        for entry in storewatch_entry {
+                            let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
+                            stream.write_all(json_string.as_bytes()).expect("Failed to send TCP message");
+                        }
+                    };   
+                }
+            }
         }
     } else if configmap.log_type == "splunkapi" 
     {

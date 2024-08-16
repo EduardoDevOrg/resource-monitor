@@ -112,7 +112,7 @@ pub fn startup_log(hostname: &str, app_folder: &Path, startup_entry: &mut Startu
     let mut ip_addresses = Vec::new();
     for iface in if_addrs {
         if let IpAddr::V4(ipv4) = iface.ip() {
-            if iface.name != "lo" {
+            if !iface.name.starts_with("lo") {
                 ip_addresses.push(ipv4.to_string());
             }
         }

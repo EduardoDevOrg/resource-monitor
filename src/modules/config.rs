@@ -177,116 +177,76 @@ pub fn get_configmap(module: &str) -> ConfigEntry {
     match module {
         "startup" | "agent" | "storewatch" => {
             let (bin_folder, app_folder, root_folder) = get_app_dirs();
-
             let config_data = get_config_path(&bin_folder, module);
-            
-            let default_type = String::from("file");
-            let config_type = config_data
-                .get("default")
-                .and_then(|section| section.get("type"))
-                .unwrap_or(&default_type)
+
+            let config_type = config_data.get("default")
+                .and_then(|s| s.get("type"))
+                .unwrap_or(&"file".to_string())
                 .to_string();
-            
-            let default_location = String::from("/var/log/");
-            let location = config_data
-                .get("default")
-                .and_then(|section| section.get("location"))
-                .unwrap_or(&default_location)
+
+            let location = config_data.get("default")
+                .and_then(|s| s.get("location"))
+                .unwrap_or(&"/var/log/".to_string())
                 .trim_start_matches('/')
                 .to_string();
 
-            let default_port = 0;
-            let port: u16 = config_data
-                .get("default")
-                .and_then(|section| section.get("port"))
+            let port = config_data.get("default")
+                .and_then(|s| s.get("port"))
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(default_port);
+                .unwrap_or(0);
 
-            let default_add_wrapper = false;
-            let add_wrapper: bool = config_data
-                .get("default")
-                .and_then(|section| section.get("add_wrapper"))
+            let add_wrapper = config_data.get("default")
+                .and_then(|s| s.get("add_wrapper"))
                 .and_then(|s| parse_bool(s))
-                .unwrap_or(default_add_wrapper);
+                .unwrap_or(false);
 
-            let default_interval = 10;
-            let interval: u64 = config_data
-                .get(module)
-                .and_then(|section| section.get("interval"))
+            let interval = config_data.get(module)
+                .and_then(|s| s.get("interval"))
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(default_interval);
+                .unwrap_or(10);
 
-            let default_index = String::from("_internal");
-            let index: String = config_data
-                .get(module)
-                .and_then(|section| section.get("index"))
-                .unwrap_or(&default_index)
+            let index = config_data.get(module)
+                .and_then(|s| s.get("index"))
+                .unwrap_or(&"_internal".to_string())
                 .to_string();
 
-            let default_source = String::from("Resmonitor:JSON");
-            let source: String = config_data
-                .get(module)
-                .and_then(|section| section.get("source"))
-                .unwrap_or(&default_source)
+            let source = config_data.get(module)
+                .and_then(|s| s.get("source"))
+                .unwrap_or(&"Resmonitor:JSON".to_string())
                 .to_string();
 
-            let default_sourcetype = String::from("resmonitor_json");
-            let sourcetype: String = config_data
-                .get(module)
-                .and_then(|section| section.get("sourcetype"))
-                .unwrap_or(&default_sourcetype)
+            let sourcetype = config_data.get(module)
+                .and_then(|s| s.get("sourcetype"))
+                .unwrap_or(&"resmonitor_json".to_string())
                 .to_string();
 
-            let default_file_name = String::from("resmonitor_json.log");
-            let file_name: String = config_data
-                .get(module)
-                .and_then(|section| section.get("file_name"))
-                .unwrap_or(&default_file_name)
+            let file_name = config_data.get(module)
+                .and_then(|s| s.get("file_name"))
+                .unwrap_or(&"resmonitor_json.log".to_string())
                 .to_string();
 
-            let log_location: String;
-            let mut log_folder = PathBuf::new(); // Initialize with a default value
-            let mut host = String::new();
-            let mut api = String::new();
-
-            if config_type == "file" {
-                if root_folder.to_string_lossy().contains("splunk") || root_folder.to_string_lossy().contains("splunkforwarder") || root_folder.to_string_lossy().contains("splunkuniversalforwarder") {
-                    log_location = format!("{}/{}", root_folder.display(), location);
-                    log_folder = PathBuf::from(&log_location);
-                } else {
-                    log_location = format!("/{}", location);
-                    log_folder = PathBuf::from(&log_location);
-                }
-            
-                if !Path::new(&log_folder).exists() {
-                    fs::create_dir_all(&log_folder).expect("Failed to create log directory");
-                }
-
-            } else if config_type == "tcp" {
-                agent_logger("error", "get_configmap", 
-                &format!( 
-                    r#"{{
-                        "message": "TCP type is not supported yet",
-                        "module": "{}"
-                    }}"#,
-                    module
-                ));
-                process::exit(1);
-            } else if config_type == "udp" {
-                host = location;
-            } else if config_type == "splunkapi" {
-                api = location;
-            } else if config_type == "http" {
-                agent_logger("error", "get_configmap", 
-                &format!( 
-                    r#"{{
-                        "message": "HTTP type is not supported yet",
-                        "module": "{}"
-                    }}"#,
-                    module
-                ));
-                process::exit(1);
-            }
+            let (log_folder, host, api) = match config_type.as_str() {
+                "file" => {
+                    let log_location = if root_folder.to_string_lossy().contains("splunk") {
+                        format!("{}/{}", root_folder.display(), location)
+                    } else {
+                        format!("/{}", location)
+                    };
+                    let log_folder = PathBuf::from(&log_location);
+                    if !log_folder.exists() {
+                        fs::create_dir_all(&log_folder).expect("Failed to create log directory");
+                    }
+                    (log_folder, String::new(), String::new())
+                },
+                "http" => {
+                    agent_logger("error", "get_configmap", &format!(r#"{{"message": "{} type is not supported yet", "module": "{}"}}"#, config_type, module));
+                    process::exit(1);
+                },
+                "tcp" => (PathBuf::new(), location, String::new()),
+                "udp" => (PathBuf::new(), location, String::new()),
+                "splunkapi" => (PathBuf::new(), String::new(), location),
+                _ => (PathBuf::new(), String::new(), String::new()),
+            };
 
             ConfigEntry {
                 log_type: config_type,
@@ -302,18 +262,11 @@ pub fn get_configmap(module: &str) -> ConfigEntry {
                 add_wrapper,
                 index,
                 source,
-                sourcetype
+                sourcetype,
             }
-            
         },
         _ => {
-            agent_logger("error", "get_configmap", 
-            &format!( 
-                r#"{{
-                    "message": "Invalid module '{}'. Valid modules are: startup, agent, storewatch"
-                }}"#,
-                module
-            ));
+            agent_logger("error", "get_configmap", &format!(r#"{{"message": "Invalid module '{}'. Valid modules are: startup, agent, storewatch"}}"#, module));
             process::exit(1);
         }
     }
