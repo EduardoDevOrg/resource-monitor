@@ -10,7 +10,7 @@ mod modules {
     pub mod logging;
 }
 use std::env::consts::OS;
-use sysinfo::{System, Networks, Pid};
+use sysinfo::{Networks, Pid, System};
 use reqwest::blocking::ClientBuilder;
 
 fn check_running_process(exe: &Path, current_pid: &u32) {
@@ -139,11 +139,13 @@ fn main() {
     
     let running_module = &args[1];
 
-
-    
+    let current_pid = process::id();
+    let mut splunk_pid = modules::config::get_splunk_pid(&configmap.root_folder);
+    if splunk_pid == 0 {
+        splunk_pid = current_pid;
+    }
     
     if running_module == "agent" {
-        let current_pid = process::id();
         check_running_process(&configmap.bin_folder, &current_pid);
     }
 
@@ -156,17 +158,14 @@ fn main() {
             let agent_path = configmap.log_folder;
             let agent_file = agent_path.join(configmap.file_name);
 
-            let agent_uptime = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_secs()-20;
+            let agent_starttime = sys.process(Pid::from_u32(splunk_pid)).unwrap().start_time();
             
             let mut log_writer = BufWriter::new(OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(agent_file.clone())
                 .expect("Failed to open log file"));
-            let mut log_entry = modules::log_entry::LogEntry::new(hostname.clone(), running_module.clone(), agent_uptime);
+            let mut log_entry = modules::log_entry::LogEntry::new(hostname.clone(), running_module.clone(), agent_starttime);
 
             loop {
                 log_entry.timestamp = std::time::SystemTime::now()
@@ -254,12 +253,9 @@ fn main() {
             let mut networks = Networks::new_with_refreshed_list();
             let interval = configmap.interval;
 
-            let agent_uptime = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_secs()-20;
+            let agent_starttime = sys.process(Pid::from_u32(splunk_pid)).unwrap().start_time();
 
-            let mut log_entry = modules::log_entry::LogEntry::new(hostname.clone(), running_module.clone(), agent_uptime);
+            let mut log_entry = modules::log_entry::LogEntry::new(hostname.clone(), running_module.clone(), agent_starttime);
             
             loop {
                 log_entry.timestamp = std::time::SystemTime::now()
@@ -374,12 +370,9 @@ fn main() {
                 let mut networks = Networks::new_with_refreshed_list();
                 let interval = configmap.interval;
     
-                let agent_uptime = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .expect("Time went backwards")
-                    .as_secs()-20;
+                let agent_starttime = sys.process(Pid::from_u32(splunk_pid)).unwrap().start_time();
     
-                let mut log_entry = modules::log_entry::LogEntry::new(hostname.clone(), running_module.clone(), agent_uptime);
+                let mut log_entry = modules::log_entry::LogEntry::new(hostname.clone(), running_module.clone(), agent_starttime);
                 
                 loop {
                     log_entry.timestamp = std::time::SystemTime::now()
@@ -486,12 +479,9 @@ fn main() {
             ("host", hostname.as_str()),
             ];
 
-            let agent_uptime = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_secs()-20;
+            let agent_starttime = sys.process(Pid::from_u32(splunk_pid)).unwrap().start_time();
 
-            let mut log_entry = modules::log_entry::LogEntry::new(hostname.clone(), running_module.clone(), agent_uptime);
+            let mut log_entry = modules::log_entry::LogEntry::new(hostname.clone(), running_module.clone(), agent_starttime);
 
             loop {
                 log_entry.timestamp = std::time::SystemTime::now()

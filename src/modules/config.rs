@@ -165,6 +165,18 @@ pub fn get_splunk_hostname(splunk_root: &Path) -> String {
     }
 }
 
+pub fn get_splunk_pid(splunk_root: &Path) -> u32 {
+    let pid_file = splunk_root.join("var").join("run").join("splunk").join("splunkd.pid");
+    if pid_file.exists() {
+        if let Ok(contents) = fs::read_to_string(pid_file) {
+            if let Some(line) = contents.lines().next() {
+                return line.parse::<u32>().unwrap();
+            }
+        }
+    }
+    0
+}
+
 fn parse_bool(value: &str) -> Option<bool> {
     match value.to_lowercase().as_str() {
         "t" | "true" | "1" => Some(true),

@@ -3,6 +3,7 @@ use sysinfo::System;
 use serde::{Serialize, Deserialize};
 use if_addrs::get_if_addrs;
 use super::logging::agent_logger;
+use super::config::get_splunk_pid;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct StartupEntry {
@@ -13,7 +14,8 @@ pub struct StartupEntry {
     splunk_version: String,
     instance_id: String,
     cpu_num: u64,
-    mem_total: u64
+    mem_total: u64,
+    splunk_pid: u32
 }
 
 impl StartupEntry {
@@ -26,7 +28,8 @@ impl StartupEntry {
             splunk_version: get_splunk_version(splunk_root),
             instance_id: get_instance_id(splunk_root),
             cpu_num: 0,
-            mem_total: 0
+            mem_total: 0,
+            splunk_pid: get_splunk_pid(splunk_root)
         }
     }
 

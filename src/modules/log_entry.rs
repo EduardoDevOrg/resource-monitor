@@ -22,7 +22,7 @@ pub struct LogEntry {
     hostname: String,
     pub uptime: u64,
     pub component: String,
-    pub agent_uptime: u64,
+    pub agent_starttime: u64,
 }
 
 struct CustomFormatter;
@@ -37,7 +37,7 @@ impl Formatter for CustomFormatter {
 }
 
 impl LogEntry {
-    pub fn new(hostname: String, component: String, agent_uptime: u64) -> Self {
+    pub fn new(hostname: String, component: String, agent_starttime: u64) -> Self {
         Self {
             timestamp: 0,
             cpu_usage: 0.0,
@@ -53,7 +53,7 @@ impl LogEntry {
             uptime: 0,
             hostname,
             component,
-            agent_uptime,
+            agent_starttime,
         }
     }
 
