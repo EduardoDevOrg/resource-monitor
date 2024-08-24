@@ -4,6 +4,8 @@ use serde_json::ser::Formatter;
 use sysinfo::{System, Networks};
 use std::io::Write;
 
+use super::logging::agent_logger;
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LogEntry {
     pub timestamp: u64,
@@ -20,7 +22,7 @@ pub struct LogEntry {
     hostname: String,
     pub uptime: u64,
     pub component: String,
-    pub agent_uptime: u64,
+    pub agent_starttime: u64,
 }
 
 struct CustomFormatter;
@@ -35,7 +37,7 @@ impl Formatter for CustomFormatter {
 }
 
 impl LogEntry {
-    pub fn new(hostname: String, component: String, agent_uptime: u64) -> Self {
+    pub fn new(hostname: String, component: String, agent_starttime: u64) -> Self {
         Self {
             timestamp: 0,
             cpu_usage: 0.0,
@@ -51,7 +53,7 @@ impl LogEntry {
             uptime: 0,
             hostname,
             component,
-            agent_uptime,
+            agent_starttime,
         }
     }
 
@@ -105,19 +107,31 @@ impl LogEntry {
         self.serialize(&mut serializer)
     }
 
-    
+    pub fn add_wrapper(&self, index: &str, source: &str, sourcetype: &str, host: String) -> String {
+        let log_entry_json = serde_json::to_string(self).expect("Failed to serialize log entry");
 
+        let wrapper = serde_json::json!({
+            "index": index,
+            "source": source,
+            "sourcetype": sourcetype,
+            "host": host,
+            "event": serde_json::from_str::<serde_json::Value>(&log_entry_json).expect("Failed to parse log entry JSON")
+        });
+
+        serde_json::to_string(&wrapper).expect("Failed to serialize wrapped log entry")
+    }
 }
 
+
+
 pub fn check_log_file_size(log_path: &Path) {
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
     let metadata = fs::metadata(log_path).expect("Unable to get log file metadata");
     let file_size = metadata.len();
     if file_size > 10 * 1024 * 1024 {
         fs::write(log_path, "").expect("Unable to clear log file");
-        println!("{timestamp} - log_level=\"INFO\" - module=\"hostagent_log\" - Hostagent log was rotated!");
+        agent_logger("info", "check_log_file_size", 
+        r#"{
+                "message": "Agent log was rotated!"
+            }"#);
     }
 }
