@@ -8,6 +8,9 @@ mod modules {
     pub mod log_entry;
     pub mod storewatch;
     pub mod logging;
+    pub mod hostinfo;
+    pub mod decryptor;
+    pub mod signalfx;
 }
 use std::env::consts::OS;
 use sysinfo::{Networks, Pid, System};
@@ -121,17 +124,20 @@ fn check_running_process(exe: &Path, current_pid: &u32) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    let mut input = String::new();
+    
     if args.len() < 2 {
         modules::logging::agent_logger("error", "main", 
         r#"{
                 "message": "No arguments provided"
             }"#);
         println!("No arguments provided!\n
-        Possible arguments are: agent, startup, storewatch");
+        Possible arguments are: agent, startup, storewatch, hostinfo");
         process::exit(1);
     }
 
     let configmap = modules::config::get_configmap(&args[1]);
+    
     let mut hostname = get_splunk_hostname(&configmap.root_folder);
     if hostname == "no_host" {
         hostname = gethostname().to_string_lossy().to_string();
@@ -144,13 +150,25 @@ fn main() {
     if splunk_pid == 0 {
         splunk_pid = current_pid;
     }
-    
+
+    let signalfx_client = if !configmap.signalfx_uri.is_empty() {
+        Some(modules::signalfx::get_signalfx_client().unwrap())
+    } else {
+        None
+    };
+
+    let signalfx_token = if !configmap.signalfx_uri.is_empty() {
+        modules::decryptor::decrypt_password(&configmap.password)
+    } else {
+        None
+    };
+
     if running_module == "agent" {
         check_running_process(&configmap.bin_folder, &current_pid);
     }
 
-
-    if configmap.log_type == "file" {
+    if configmap.log_type == "file" 
+    {
         if running_module == "agent" {
             let mut sys = System::new_all();
             let mut networks = Networks::new_with_refreshed_list();
@@ -182,6 +200,11 @@ fn main() {
                 }
                 
                 log_entry.finalize(interval);
+
+                if !configmap.signalfx_uri.is_empty() {
+                    let gauge_json = modules::signalfx::generate_gauge_json(&log_entry);
+                    let _ = modules::signalfx::send_gauge(&signalfx_client.clone().unwrap(), &configmap.signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap());
+                }
         
                 log_entry.write_json(&mut log_writer).expect("Failed to write to log file");
     
@@ -193,9 +216,8 @@ fn main() {
                 modules::log_entry::check_log_file_size(agent_file.as_ref());
             }
         } else if running_module == "startup" {
-            let mut startup_entry = modules::startup::StartupEntry::new(hostname.clone(), &configmap.root_folder);
-            let startup_string = modules::startup::startup_log(&hostname, &configmap.app_folder, &mut startup_entry);
-
+            let startup_string = modules::startup::startup_log(&hostname, &configmap.app_folder);
+            
             let startup_path = configmap.log_folder;
             let startup_file = startup_path.join(configmap.file_name);
 
@@ -206,7 +228,7 @@ fn main() {
                 .open(startup_file)
                 .expect("Failed to open PID file");
 
-            writeln!(file, "{}", startup_string.unwrap()).expect("Failed to write to PID file");
+            writeln!(file, "{}", startup_string.unwrap().as_json()).expect("Failed to write to PID file");
             file.flush().expect("Failed to flush log file");
             process::exit(0);
         } else if running_module == "storewatch" {
@@ -237,9 +259,25 @@ fn main() {
             }
             file.flush().expect("Failed to flush log file");
             process::exit(0);
+        } else if running_module == "hostinfo" {
+            std::io::stdin().read_line(&mut input).unwrap();
+            let splunk_info = modules::hostinfo::get_splunkinfo(configmap.localapi.clone(), input);
+
+            let hostinfo_path = configmap.log_folder;
+            let hostinfo_file = hostinfo_path.join(configmap.file_name);
+
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(hostinfo_file)
+                .expect("Failed to open hostinfo log file");
+
+            writeln!(file, "{}", splunk_info.unwrap().as_json()).expect("Failed to write to log file");
+            file.flush().expect("Failed to flush log file");
+            process::exit(0);
+            
         }
-        
-        
         
     } else if configmap.log_type == "udp" 
     {
@@ -294,13 +332,12 @@ fn main() {
             }
 
         } else if running_module == "startup" {
-            let mut startup_entry = modules::startup::StartupEntry::new(hostname.clone(), &configmap.root_folder);
-            let startup_string = modules::startup::startup_log(&hostname, &configmap.app_folder, &mut startup_entry);
+            let startup_string = modules::startup::startup_log(&hostname, &configmap.app_folder);
 
             let startup_data = if add_wrapper {
-                startup_entry.add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone())
+                startup_string.unwrap().add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone())
             } else {
-                startup_string.unwrap()
+                startup_string.unwrap().as_json()
             };
 
             let udp_address = format!("{}:{}", udp_host, udp_port);
@@ -354,13 +391,30 @@ fn main() {
                     }
                 };   
             }
+        } else if running_module == "hostinfo" {
+            std::io::stdin().read_line(&mut input).unwrap();
+            let splunk_info = if add_wrapper {
+                modules::hostinfo::get_splunkinfo(configmap.localapi.clone(), input).unwrap().add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone())
+            } else {
+                modules::hostinfo::get_splunkinfo(configmap.localapi.clone(), input).unwrap().as_json()
+            };
 
+            let udp_address = format!("{}:{}", udp_host, udp_port);
+            let resolved_address = udp_address.to_socket_addrs()
+                .expect("Failed to resolve hostname")
+                .next()
+                .expect("No addresses found for hostname");
             
+            
+            socket.send_to(splunk_info.as_bytes(), resolved_address)
+                .expect("Failed to send UDP message");
 
+            process::exit(0);
+            
         }
+
     } else if configmap.log_type == "tcp" 
     {
-        {
             let tcp_host = configmap.host.clone();
             let tcp_port = configmap.port;
             let add_wrapper = configmap.add_wrapper;
@@ -408,13 +462,12 @@ fn main() {
                 }
     
             } else if running_module == "startup" {
-                let mut startup_entry = modules::startup::StartupEntry::new(hostname.clone(), &configmap.root_folder);
-                let startup_string = modules::startup::startup_log(&hostname, &configmap.app_folder, &mut startup_entry);
+                let startup_string = modules::startup::startup_log(&hostname, &configmap.app_folder);
     
                 let startup_data = if add_wrapper {
-                    startup_entry.add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone())
+                    startup_string.unwrap().add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone())
                 } else {
-                    startup_string.unwrap()
+                    startup_string.unwrap().as_json()
                 };
     
                 let tcp_address = format!("{}:{}", tcp_host, tcp_port);
@@ -457,8 +510,22 @@ fn main() {
                         }
                     };   
                 }
-            }
+        } else if running_module == "hostinfo" {
+            std::io::stdin().read_line(&mut input).unwrap();
+            let splunk_info = if add_wrapper {
+                modules::hostinfo::get_splunkinfo(configmap.localapi.clone(), input).unwrap().add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone())
+            } else {
+                modules::hostinfo::get_splunkinfo(configmap.localapi.clone(), input).unwrap().as_json()
+            };
+
+            let tcp_address = format!("{}:{}", tcp_host, tcp_port);
+            let mut stream = TcpStream::connect(tcp_address).expect("Failed to connect to TCP server");
+            
+            stream.write_all(splunk_info.as_bytes()).expect("Failed to send TCP message");
+            process::exit(0);
+            
         }
+
     } else if configmap.log_type == "splunkapi" 
     {
         let client = ClientBuilder::new()
@@ -532,14 +599,13 @@ fn main() {
             ("host", hostname.as_str()),
             ];
 
-            let mut startup_entry = modules::startup::StartupEntry::new(hostname.clone(), &configmap.root_folder);
-            let startup_string = modules::startup::startup_log(&hostname, &configmap.app_folder, &mut startup_entry);
+            let startup_string = modules::startup::startup_log(&hostname, &configmap.app_folder);
 
             let payload = startup_string.unwrap();
 
             match client.post(api_url)
             .query(&params)
-            .body(payload)
+            .body(payload.as_json())
             .timeout(std::time::Duration::from_secs(5))
             .send() {
                 Ok(_) => {
@@ -616,6 +682,37 @@ fn main() {
                 } 
             }
             process::exit(0);
+        } else if running_module == "hostinfo" {
+            let params = [
+            ("source", configmap.source.as_str()),
+            ("sourcetype", configmap.sourcetype.as_str()),
+            ("index", configmap.index.as_str()),
+            ("host", hostname.as_str()),
+            ];
+            std::io::stdin().read_line(&mut input).unwrap();
+            let splunk_info = modules::hostinfo::get_splunkinfo(configmap.localapi.clone(), input);
+            let payload = splunk_info.unwrap();
+
+            match client.post(api_url)
+            .query(&params)
+            .body(payload.as_json())
+            .timeout(std::time::Duration::from_secs(5))
+            .send() {
+                Ok(_) => {
+                }
+                Err(err) => {
+                    modules::logging::agent_logger("error", "hostinfo", 
+                    &format!(
+                        r#"{{
+                            "message": "Error sending request",
+                            "error": "{}"
+                        }}"#,
+                        err
+                    ));
+                }
+            }
+            process::exit(0);
+            
         }
 
     }

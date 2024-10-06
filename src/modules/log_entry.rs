@@ -9,17 +9,17 @@ use super::logging::agent_logger;
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LogEntry {
     pub timestamp: u64,
-    cpu_usage: f64,
-    total_mem: u64,
-    used_mem: u64,
-    mem_usage: f64,
-    disk_read: u64,
-    disk_write: u64,
-    bytes_in: u64,
-    bytes_out: u64,
-    packets_in: u64,
-    packets_out: u64,
-    hostname: String,
+    pub cpu_usage: f64,
+    pub total_mem: u64,
+    pub used_mem: u64,
+    pub mem_usage: f64,
+    pub disk_read: u64,
+    pub disk_write: u64,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+    pub packets_in: u64,
+    pub packets_out: u64,
+    pub hostname: String,
     pub uptime: u64,
     pub component: String,
     pub agent_starttime: u64,
@@ -120,6 +120,7 @@ impl LogEntry {
 
         serde_json::to_string(&wrapper).expect("Failed to serialize wrapped log entry")
     }
+
 }
 
 

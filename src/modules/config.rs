@@ -18,7 +18,10 @@ pub struct ConfigEntry {
     pub add_wrapper: bool,
     pub index: String,
     pub source: String,
-    pub sourcetype: String
+    pub sourcetype: String,
+    pub localapi: String,
+    pub password: String,
+    pub signalfx_uri: String,
 }
 
 pub fn get_app_dirs() -> (PathBuf, PathBuf, PathBuf) {
@@ -38,9 +41,13 @@ pub fn get_app_dirs() -> (PathBuf, PathBuf, PathBuf) {
         root_folder.push(component);
     }
 
-    if root_folder.to_string_lossy().contains("splunk") || root_folder.to_string_lossy().contains("splunkforwarder") || root_folder.to_string_lossy().contains("splunkuniversalforwarder") {
+    let root_folder_lossy = root_folder.to_string_lossy();
+    if root_folder_lossy.contains("splunk") || 
+        root_folder_lossy.contains("splunkforwarder") || 
+        root_folder_lossy.contains("splunkuniversalforwarder") {
         (bin_folder, app_folder, root_folder)
     } else {
+        // Move one directory up for non-splunk paths
         root_folder = root_folder.parent().unwrap().to_path_buf();
         (bin_folder, app_folder, root_folder)
     }
@@ -87,37 +94,33 @@ fn read_file(path: &Path, last_modified_time: &mut std::time::SystemTime) -> Has
 }
 
 fn visit_dirs(dir: &Path, module: &str) -> Option<PathBuf> {
-
-    if module == "agent" || module == "storewatch" || module == "startup" {
+    if ["agent", "storewatch", "startup", "hostinfo"].contains(&module) {
         // Search in the provided directory
-    let conf_path = dir.join("agent.conf");
-    if conf_path.exists() {
-        return Some(conf_path);
-    }
-
-    // Go one directory up and search in `default` or `local`
-    if let Some(parent_dir) = dir.parent() {
-        let default_dir = parent_dir.join("default").join("agent.conf");
-        if default_dir.exists() {
-            return Some(default_dir);
+        let conf_path = dir.join("agent.conf");
+        if conf_path.exists() {
+            return Some(conf_path);
         }
 
-        let local_dir = parent_dir.join("local").join("agent.conf");
-        if local_dir.exists() {
-            return Some(local_dir);
+        // Go one directory up and search in `default` or `local`
+        if let Some(parent_dir) = dir.parent() {
+            for subdir in ["default", "local"] {
+                let path = parent_dir.join(subdir).join("agent.conf");
+                if path.exists() {
+                    return Some(path);
+                }
+            }
         }
-    }
 
-    // If no file is found, print a message and return None
-    agent_logger("debug", "visit_dirs", 
-    &format!( 
-        r#"{{
-            "message": "No configuration file found for module '{}' in '{}' or '{}' or '{}'",
-            "module": "{}"
-        }}"#,
-        module, dir.to_string_lossy(), dir.parent().unwrap().to_string_lossy(), dir.parent().unwrap().parent().unwrap().to_string_lossy(), module
-    ));
-    None
+        // If no file is found, print a message and return None
+        agent_logger("debug", "visit_dirs", 
+        &format!( 
+            r#"{{
+                "message": "No configuration file found for module '{}' in '{}' or '{}' or '{}'",
+                "module": "{}"
+            }}"#,
+            module, dir.to_string_lossy(), dir.parent().unwrap().to_string_lossy(), dir.parent().unwrap().parent().unwrap().to_string_lossy(), module
+        ));
+        None
     } else {
         Some(dir.to_path_buf())
     }
@@ -187,27 +190,27 @@ fn parse_bool(value: &str) -> Option<bool> {
 
 pub fn get_configmap(module: &str) -> ConfigEntry {
     match module {
-        "startup" | "agent" | "storewatch" => {
+        "startup" | "agent" | "storewatch" | "hostinfo" => {
             let (bin_folder, app_folder, root_folder) = get_app_dirs();
             let config_data = get_config_path(&bin_folder, module);
 
-            let config_type = config_data.get("default")
+            let config_type = config_data.get(module)
                 .and_then(|s| s.get("type"))
                 .unwrap_or(&"file".to_string())
                 .to_string();
 
-            let location = config_data.get("default")
+            let location = config_data.get(module)
                 .and_then(|s| s.get("location"))
                 .unwrap_or(&"/var/log/".to_string())
                 .trim_start_matches('/')
                 .to_string();
 
-            let port = config_data.get("default")
+            let port = config_data.get(module)
                 .and_then(|s| s.get("port"))
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
 
-            let add_wrapper = config_data.get("default")
+            let add_wrapper = config_data.get(module)
                 .and_then(|s| s.get("add_wrapper"))
                 .and_then(|s| parse_bool(s))
                 .unwrap_or(false);
@@ -224,17 +227,32 @@ pub fn get_configmap(module: &str) -> ConfigEntry {
 
             let source = config_data.get(module)
                 .and_then(|s| s.get("source"))
-                .unwrap_or(&"Resmonitor:JSON".to_string())
+                .unwrap_or(&format!("{}:json", module).to_string())
                 .to_string();
 
             let sourcetype = config_data.get(module)
                 .and_then(|s| s.get("sourcetype"))
-                .unwrap_or(&"resmonitor_json".to_string())
+                .unwrap_or(&format!("{}_json", module).to_string())
                 .to_string();
 
             let file_name = config_data.get(module)
                 .and_then(|s| s.get("file_name"))
-                .unwrap_or(&"resmonitor_json.log".to_string())
+                .unwrap_or(&format!("{}_json.log", module).to_string())
+                .to_string();
+
+            let password = config_data.get(module)
+                .and_then(|s| s.get("password"))
+                .unwrap_or(&"".to_string())
+                .to_string();
+
+            let signalfx_uri = config_data.get(module)
+                .and_then(|s| s.get("signalfx_uri"))
+                .unwrap_or(&"".to_string())
+                .to_string();
+
+            let localapi = config_data.get("hostinfo")
+                .and_then(|s| s.get("localapi"))
+                .unwrap_or(&"127.0.0.1:8089".to_string())
                 .to_string();
 
             let (log_folder, host, api) = match config_type.as_str() {
@@ -275,6 +293,9 @@ pub fn get_configmap(module: &str) -> ConfigEntry {
                 index,
                 source,
                 sourcetype,
+                localapi,
+                password,
+                signalfx_uri
             }
         },
         _ => {

@@ -33,6 +33,10 @@ impl StartupEntry {
         }
     }
 
+    pub fn as_json(&self) -> String {
+        serde_json::to_string(self).expect("Failed to serialize startup entry")
+    }
+
     pub fn add_wrapper(&self, index: &str, source: &str, sourcetype: &str, host: String) -> String {
         let startup_entry_json = serde_json::to_string(self).expect("Failed to serialize startup entry");
 
@@ -49,9 +53,9 @@ impl StartupEntry {
 }
 
 fn get_splunk_version(splunk_root: &Path) -> String {
-    let splunk_version_path = splunk_root.join("etc/splunk.version");
-    if splunk_version_path.exists() {
-        let version_contents = std::fs::read_to_string(&splunk_version_path).unwrap();
+    let splunk_path = splunk_root.join("etc/splunk.version");
+    if splunk_path.exists() {
+        let version_contents = std::fs::read_to_string(&splunk_path).unwrap();
         let version_line = version_contents.lines()
             .find(|line| line.starts_with("VERSION="))
             .unwrap_or("");
@@ -101,12 +105,26 @@ pub fn check_stopswitch(switchpath: &Path) {
     }
 }
 
-pub fn startup_log(hostname: &str, app_folder: &Path, startup_entry: &mut StartupEntry) -> Result<String, Box<dyn Error>> {
+pub fn startup_log(hostname: &str, app_folder: &Path) -> Result<StartupEntry, Box<dyn Error>> {
     let timestamp_epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("Time went backwards")
         .as_secs();
 
+    let splunk_root;
+    let mut is_splunk = false;
+    let app_folder_str = app_folder.to_string_lossy();
+    if ["splunk", "splunkforwarder", "splunkuniversalforwarder"]
+        .iter()
+        .any(|&s| app_folder_str.contains(s))
+    {
+        splunk_root = app_folder.parent().unwrap().parent().unwrap().parent().unwrap();
+        is_splunk = true;
+    } else {
+        splunk_root = app_folder;
+    }
+
+    let mut startup_entry = StartupEntry::new(hostname.to_string(), splunk_root);
     startup_entry.timestamp = timestamp_epoch;
     startup_entry.hostname = hostname.to_string();
 
@@ -127,11 +145,10 @@ pub fn startup_log(hostname: &str, app_folder: &Path, startup_entry: &mut Startu
     startup_entry.cpu_num = sys.cpus().len() as u64;
     startup_entry.mem_total = sys.total_memory();
 
-    if app_folder.to_string_lossy().contains("splunk") || app_folder.to_string_lossy().contains("splunkforwarder") || app_folder.to_string_lossy().contains("splunkuniversalforwarder") {
+    if is_splunk {
         let app_path = app_folder.join("bin");
         create_stopswitch(&app_path);
     }
 
-    let json_entry = serde_json::to_string(&startup_entry)?;
-    Ok(json_entry)
+    Ok(startup_entry)
 }

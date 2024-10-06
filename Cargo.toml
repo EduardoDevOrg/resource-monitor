@@ -9,13 +9,14 @@ opt-level = "s"
 lto = true
 
 [dependencies]
-sysinfo = "0.31.2"
+sysinfo = "0.32.0"
 gethostname = "0.5.0"
-serde_json = "1.0.125"
-serde = { version = "1.0.208", features = ["derive"] }
+serde_json = "1.0.128"
+serde = { version = "1.0.210", features = ["derive"] }
 pnet = "0.35.0"
+base64 = "0.22.1"
 if-addrs = "0.13.3"
-reqwest = { version = "0.12.7", features = ["blocking", "json"] }
+reqwest = { version = "0.12.8", features = ["blocking", "json"] }
 
 [target.x86_64-pc-windows-msvc.dependencies]
 openssl = { version = "0.10.66", features = ["vendored"] }
