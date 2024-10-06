@@ -202,8 +202,14 @@ fn main() {
                 log_entry.finalize(interval);
 
                 if !configmap.signalfx_uri.is_empty() {
+                    let signalfx_client = signalfx_client.clone();
+                    let signalfx_uri = configmap.signalfx_uri.clone();
                     let gauge_json = modules::signalfx::generate_gauge_json(&log_entry);
-                    let _ = modules::signalfx::send_gauge(&signalfx_client.clone().unwrap(), &configmap.signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap());
+                    let signalfx_token = signalfx_token.clone();
+
+                    std::thread::spawn(move || {
+                        let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap());
+                    });
                 }
         
                 log_entry.write_json(&mut log_writer).expect("Failed to write to log file");
@@ -310,6 +316,17 @@ fn main() {
             }
     
             log_entry.finalize(interval);
+
+            if !configmap.signalfx_uri.is_empty() {
+                let signalfx_client = signalfx_client.clone();
+                let signalfx_uri = configmap.signalfx_uri.clone();
+                let gauge_json = modules::signalfx::generate_gauge_json(&log_entry);
+                let signalfx_token = signalfx_token.clone();
+
+                std::thread::spawn(move || {
+                    let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap());
+                });
+            }
 
             let json_string = if add_wrapper {
                 log_entry.add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone())
@@ -443,6 +460,17 @@ fn main() {
                     }
         
                     log_entry.finalize(interval);
+
+                    if !configmap.signalfx_uri.is_empty() {
+                        let signalfx_client = signalfx_client.clone();
+                        let signalfx_uri = configmap.signalfx_uri.clone();
+                        let gauge_json = modules::signalfx::generate_gauge_json(&log_entry);
+                        let signalfx_token = signalfx_token.clone();
+    
+                        std::thread::spawn(move || {
+                            let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap());
+                        });
+                    }
     
                     let json_string = if add_wrapper {
                         log_entry.add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone())
@@ -565,6 +593,18 @@ fn main() {
                 }
     
                 log_entry.finalize(interval);
+
+                if !configmap.signalfx_uri.is_empty() {
+                    let signalfx_client = signalfx_client.clone();
+                    let signalfx_uri = configmap.signalfx_uri.clone();
+                    let gauge_json = modules::signalfx::generate_gauge_json(&log_entry);
+                    let signalfx_token = signalfx_token.clone();
+
+                    std::thread::spawn(move || {
+                        let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap());
+                    });
+                }
+                
                 let mut json_buffer = Vec::new();
                 log_entry.write_json(&mut json_buffer).expect("Failed to serialize log entry");
                 let payload = String::from_utf8(json_buffer).expect("Failed to convert JSON buffer to string");

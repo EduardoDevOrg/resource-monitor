@@ -1,3 +1,4 @@
+use std::time::Duration;
 use reqwest::{blocking::{Client, ClientBuilder}, Error};
 use serde_json::json;
 use super::logging::agent_logger;
@@ -57,6 +58,7 @@ pub fn send_gauge(client: &Client, uri: &str, data_json: &str, token: &str) -> R
         .header("Content-Type", "application/json")
         .header("X-SF-Token", token)
         .body(data_json.to_string())
+        .timeout(Duration::from_secs(3))
         .send();
 
     match response_result {
