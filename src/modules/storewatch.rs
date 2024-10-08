@@ -3,15 +3,15 @@ use sysinfo::Disks;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct StorewatchEntryLinux {
-    timestamp: u64,
-    hostname: String,
-    component: String,
-    disk_name: String,
-    mounts: Vec<String>,
-    total_size: u64,
-    free_size: u64,
-    used_size: u64,
-    disk_usage: f64
+    pub timestamp: u64,
+    pub hostname: String,
+    pub component: String,
+    pub disk_name: String,
+    pub mounts: Vec<String>,
+    pub total_size: u64,
+    pub free_size: u64,
+    pub used_size: u64,
+    pub disk_usage: f64
 }
 
 #[derive(Serialize, Deserialize, Debug)]

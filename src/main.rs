@@ -184,6 +184,7 @@ fn main() {
                 .open(agent_file.clone())
                 .expect("Failed to open log file"));
             let mut log_entry = modules::log_entry::LogEntry::new(hostname.clone(), running_module.clone(), agent_starttime);
+            log_entry.calculate_baseline(&networks);
 
             loop {
                 log_entry.timestamp = std::time::SystemTime::now()
@@ -204,11 +205,11 @@ fn main() {
                 if !configmap.signalfx_uri.is_empty() {
                     let signalfx_client = signalfx_client.clone();
                     let signalfx_uri = configmap.signalfx_uri.clone();
-                    let gauge_json = modules::signalfx::generate_gauge_json(&log_entry);
                     let signalfx_token = signalfx_token.clone();
+                    let gauge_json = modules::signalfx::generate_agent_gauge(&log_entry, &configmap.rmtag);
 
                     std::thread::spawn(move || {
-                        let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap());
+                        let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),3);
                     });
                 }
         
@@ -251,9 +252,19 @@ fn main() {
             if OS != "windows" {
                 let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
                 
-                for entry in storewatch_entry {
+                for entry in &storewatch_entry {
                     let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
+                    
                     writeln!(file, "{}", json_string).expect("Failed to write to log file");
+                }
+
+                if !configmap.signalfx_uri.is_empty() {
+                    let signalfx_client = signalfx_client.clone();
+                    let signalfx_uri = configmap.signalfx_uri.clone();
+                    let signalfx_token = signalfx_token.clone();
+                    let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
+
+                    let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),1);
                 }
             } else {
                 let storewatch_entry = modules::storewatch::get_storage_windows(&hostname);
@@ -264,7 +275,6 @@ fn main() {
                 } 
             }
             file.flush().expect("Failed to flush log file");
-            process::exit(0);
         } else if running_module == "hostinfo" {
             std::io::stdin().read_line(&mut input).unwrap();
             let splunk_info = modules::hostinfo::get_splunkinfo(configmap.localapi.clone(), input);
@@ -300,6 +310,7 @@ fn main() {
             let agent_starttime = sys.process(Pid::from_u32(splunk_pid)).unwrap().start_time();
 
             let mut log_entry = modules::log_entry::LogEntry::new(hostname.clone(), running_module.clone(), agent_starttime);
+            log_entry.calculate_baseline(&networks);
             
             loop {
                 log_entry.timestamp = std::time::SystemTime::now()
@@ -320,11 +331,11 @@ fn main() {
             if !configmap.signalfx_uri.is_empty() {
                 let signalfx_client = signalfx_client.clone();
                 let signalfx_uri = configmap.signalfx_uri.clone();
-                let gauge_json = modules::signalfx::generate_gauge_json(&log_entry);
                 let signalfx_token = signalfx_token.clone();
+                let gauge_json = modules::signalfx::generate_agent_gauge(&log_entry, &configmap.rmtag);
 
                 std::thread::spawn(move || {
-                    let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap());
+                    let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),3);
                 });
             }
 
@@ -378,16 +389,36 @@ fn main() {
                 let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
                 
                 if add_wrapper {
-                    for entry in storewatch_entry {
+                    for entry in &storewatch_entry {
                         let json_string = entry.add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone());
                         socket.send_to(json_string.as_bytes(), resolved_address)
                             .expect("Failed to send UDP message");
                     }
+
+                    if !configmap.signalfx_uri.is_empty() {
+                        let signalfx_client = signalfx_client.clone();
+                        let signalfx_uri = configmap.signalfx_uri.clone();
+                        let signalfx_token = signalfx_token.clone();
+                        let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
+    
+                        let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),1);
+                    }
                 } else {
-                    for entry in storewatch_entry {
+                    for entry in &storewatch_entry {
+
                         let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
+                        
                         socket.send_to(json_string.as_bytes(), resolved_address)
                             .expect("Failed to send UDP message");
+                    }
+
+                    if !configmap.signalfx_uri.is_empty() {
+                        let signalfx_client = signalfx_client.clone();
+                        let signalfx_uri = configmap.signalfx_uri.clone();
+                        let signalfx_token = signalfx_token.clone();
+                        let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
+    
+                        let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),1);
                     }
                 };
 
@@ -444,6 +475,7 @@ fn main() {
                 let agent_starttime = sys.process(Pid::from_u32(splunk_pid)).unwrap().start_time();
     
                 let mut log_entry = modules::log_entry::LogEntry::new(hostname.clone(), running_module.clone(), agent_starttime);
+                log_entry.calculate_baseline(&networks);
                 
                 loop {
                     log_entry.timestamp = std::time::SystemTime::now()
@@ -464,11 +496,11 @@ fn main() {
                     if !configmap.signalfx_uri.is_empty() {
                         let signalfx_client = signalfx_client.clone();
                         let signalfx_uri = configmap.signalfx_uri.clone();
-                        let gauge_json = modules::signalfx::generate_gauge_json(&log_entry);
                         let signalfx_token = signalfx_token.clone();
+                        let gauge_json = modules::signalfx::generate_agent_gauge(&log_entry, &configmap.rmtag);
     
                         std::thread::spawn(move || {
-                            let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap());
+                            let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),3);
                         });
                     }
     
@@ -512,14 +544,34 @@ fn main() {
                     let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
                     
                     if add_wrapper {
-                        for entry in storewatch_entry {
+                        for entry in &storewatch_entry {
+                            
                             let json_string = entry.add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone());
                             stream.write_all(json_string.as_bytes()).expect("Failed to send TCP message");
                         }
+
+                        if !configmap.signalfx_uri.is_empty() {
+                            let signalfx_client = signalfx_client.clone();
+                            let signalfx_uri = configmap.signalfx_uri.clone();
+                            let signalfx_token = signalfx_token.clone();
+                            let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
+        
+                            let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),1);
+                        }
                     } else {
-                        for entry in storewatch_entry {
+                        for entry in &storewatch_entry {
+
                             let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
                             stream.write_all(json_string.as_bytes()).expect("Failed to send TCP message");
+                        }
+
+                        if !configmap.signalfx_uri.is_empty() {
+                            let signalfx_client = signalfx_client.clone();
+                            let signalfx_uri = configmap.signalfx_uri.clone();
+                            let signalfx_token = signalfx_token.clone();
+                            let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
+        
+                            let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),1);
                         }
                     };
     
@@ -527,11 +579,13 @@ fn main() {
                     let storewatch_entry = modules::storewatch::get_storage_windows(&hostname);
     
                     if add_wrapper {
+                        
                         for entry in storewatch_entry {
                             let json_string = entry.add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone());
                             stream.write_all(json_string.as_bytes()).expect("Failed to send TCP message");
                         }
                     } else {
+                        
                         for entry in storewatch_entry {
                             let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
                             stream.write_all(json_string.as_bytes()).expect("Failed to send TCP message");
@@ -577,6 +631,7 @@ fn main() {
             let agent_starttime = sys.process(Pid::from_u32(splunk_pid)).unwrap().start_time();
 
             let mut log_entry = modules::log_entry::LogEntry::new(hostname.clone(), running_module.clone(), agent_starttime);
+            log_entry.calculate_baseline(&networks);
 
             loop {
                 log_entry.timestamp = std::time::SystemTime::now()
@@ -597,11 +652,11 @@ fn main() {
                 if !configmap.signalfx_uri.is_empty() {
                     let signalfx_client = signalfx_client.clone();
                     let signalfx_uri = configmap.signalfx_uri.clone();
-                    let gauge_json = modules::signalfx::generate_gauge_json(&log_entry);
                     let signalfx_token = signalfx_token.clone();
+                    let gauge_json = modules::signalfx::generate_agent_gauge(&log_entry, &configmap.rmtag);
 
                     std::thread::spawn(move || {
-                        let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap());
+                        let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),3);
                     });
                 }
                 
@@ -673,7 +728,8 @@ fn main() {
             if OS != "windows" {
                 let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
                 
-                for entry in storewatch_entry {
+                for entry in &storewatch_entry {
+                    
                     let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
                     let payload = json_string;
                     match client.post(api_url)
@@ -694,6 +750,15 @@ fn main() {
                             ));
                         }
                     }
+                }
+
+                if !configmap.signalfx_uri.is_empty() {
+                    let signalfx_client = signalfx_client.clone();
+                    let signalfx_uri = configmap.signalfx_uri.clone();
+                    let signalfx_token = signalfx_token.clone();
+                    let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
+
+                    let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),1);
                 }
             } else {
                 let storewatch_entry = modules::storewatch::get_storage_windows(&hostname);

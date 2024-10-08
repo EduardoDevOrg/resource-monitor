@@ -3,7 +3,6 @@ use serde::{Serialize, Deserialize};
 use serde_json::ser::Formatter;
 use sysinfo::{System, Networks};
 use std::io::Write;
-
 use super::logging::agent_logger;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -19,6 +18,12 @@ pub struct LogEntry {
     pub bytes_out: u64,
     pub packets_in: u64,
     pub packets_out: u64,
+    pub tx_dropped: u64,
+    pub rx_dropped: u64,
+    #[serde(skip_serializing)]
+    pub tx_dropped_baseline: u64,
+    #[serde(skip_serializing)]
+    pub rx_dropped_baseline: u64,
     pub hostname: String,
     pub uptime: u64,
     pub component: String,
@@ -50,6 +55,10 @@ impl LogEntry {
             bytes_out: 0,
             packets_in: 0,
             packets_out: 0,
+            tx_dropped: 0,
+            rx_dropped: 0,
+            tx_dropped_baseline: 0,
+            rx_dropped_baseline: 0,
             uptime: 0,
             hostname,
             component,
@@ -57,13 +66,57 @@ impl LogEntry {
         }
     }
 
+    pub fn calculate_baseline(&mut self, networks: &Networks) {
+        for (interface_name, _network) in networks.iter() {
+            let tx_dropped_path = format!("/sys/class/net/{}/statistics/tx_dropped", interface_name);
+            let rx_dropped_path = format!("/sys/class/net/{}/statistics/rx_dropped", interface_name);
+
+            if let Ok(tx_dropped_str) = fs::read_to_string(&tx_dropped_path) {
+                if let Ok(tx_dropped_value) = tx_dropped_str.trim().parse::<u64>() {
+                    self.tx_dropped_baseline += tx_dropped_value; // Set initial baseline
+                }
+            }
+
+            if let Ok(rx_dropped_str) = fs::read_to_string(&rx_dropped_path) {
+                if let Ok(rx_dropped_value) = rx_dropped_str.trim().parse::<u64>() {
+                    self.rx_dropped_baseline += rx_dropped_value; // Set initial baseline
+                }
+            }
+        }
+    }
+
+
     pub fn update(&mut self, sys: &System, networks: &Networks) {
-        for (_interface_name, network) in networks.iter() {
+        let mut total_tx_dropped = 0;
+        let mut total_rx_dropped = 0;
+
+        for (interface_name, network) in networks.iter() {
             self.bytes_in += network.received();
             self.bytes_out += network.transmitted();
             self.packets_in += network.packets_received();
             self.packets_out += network.packets_transmitted();
+
+            let tx_dropped_path = format!("/sys/class/net/{}/statistics/tx_dropped", interface_name);
+            let rx_dropped_path = format!("/sys/class/net/{}/statistics/rx_dropped", interface_name);
+
+            if let Ok(tx_dropped_str) = fs::read_to_string(&tx_dropped_path) {
+                if let Ok(tx_dropped_value) = tx_dropped_str.trim().parse::<u64>() {
+                    total_tx_dropped += tx_dropped_value; // Track total dropped in this period
+                }
+            }
+
+            if let Ok(rx_dropped_str) = fs::read_to_string(&rx_dropped_path) {
+                if let Ok(rx_dropped_value) = rx_dropped_str.trim().parse::<u64>() {
+                    total_rx_dropped += rx_dropped_value; // Track total dropped in this period
+                }
+            }
         }
+
+        self.tx_dropped += total_tx_dropped.saturating_sub(self.tx_dropped_baseline);
+        self.rx_dropped += total_rx_dropped.saturating_sub(self.rx_dropped_baseline);
+        self.tx_dropped_baseline = total_tx_dropped;
+        self.rx_dropped_baseline = total_rx_dropped;
+
 
         for process in sys.processes().values() {
             let disk_usage = process.disk_usage();
@@ -100,6 +153,8 @@ impl LogEntry {
         self.packets_out = 0;
         self.disk_read = 0;
         self.disk_write = 0;
+        self.tx_dropped = 0;
+        self.rx_dropped = 0;
     }
 
     pub fn write_json<W: Write>(&self, writer: W) -> serde_json::Result<()> {

@@ -22,6 +22,7 @@ pub struct ConfigEntry {
     pub localapi: String,
     pub password: String,
     pub signalfx_uri: String,
+    pub rmtag: String,
 }
 
 pub fn get_app_dirs() -> (PathBuf, PathBuf, PathBuf) {
@@ -255,6 +256,11 @@ pub fn get_configmap(module: &str) -> ConfigEntry {
                 .unwrap_or(&"127.0.0.1:8089".to_string())
                 .to_string();
 
+            let rmtag = config_data.get(module)
+                .and_then(|s| s.get("rmtag"))
+                .unwrap_or(&"".to_string())
+                .to_string();
+
             let (log_folder, host, api) = match config_type.as_str() {
                 "file" => {
                     let log_location = if root_folder.to_string_lossy().contains("splunk") {
@@ -295,7 +301,8 @@ pub fn get_configmap(module: &str) -> ConfigEntry {
                 sourcetype,
                 localapi,
                 password,
-                signalfx_uri
+                signalfx_uri,
+                rmtag,
             }
         },
         _ => {
