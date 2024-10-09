@@ -11,6 +11,7 @@ mod modules {
     pub mod hostinfo;
     pub mod decryptor;
     pub mod signalfx;
+    pub mod diskstats;
 }
 use std::env::consts::OS;
 use sysinfo::{Networks, Pid, System};

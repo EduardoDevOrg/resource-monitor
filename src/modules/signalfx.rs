@@ -25,8 +25,16 @@ pub fn generate_storage_gauge(storewatch_entry: &Vec<StorewatchEntryLinux>, rmta
         let host = entry.hostname.clone();
     
         let metrics = [
-            ("free_size", entry.free_size),
-            ("used_size", entry.used_size),
+            ("disk_usage", entry.disk_usage),
+            ("free_size", entry.free_size as f64),
+            ("used_size", entry.used_size as f64),
+            ("reads", entry.reads as f64),
+            ("writes", entry.writes as f64),
+            ("time_read", entry.time_read as f64),
+            ("time_write", entry.time_write as f64),
+            ("time_in_progress", entry.time_in_progress as f64),
+            ("weighted_time_in_progress", entry.weighted_time_in_progress as f64),
+            ("in_progress", entry.in_progress as f64),
         ];
 
         for (metric, value) in &metrics {
