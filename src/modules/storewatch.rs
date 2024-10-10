@@ -131,7 +131,7 @@ pub fn get_storage_linux(hostname: &str) -> Vec<StorewatchEntryLinux> {
                 .push(stat);
         }
         if i < 10 {  // Don't sleep after the last iteration
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            std::thread::sleep(std::time::Duration::from_millis(990));
         }
     }
 

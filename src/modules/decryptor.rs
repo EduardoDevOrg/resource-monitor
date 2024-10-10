@@ -3,8 +3,7 @@ use openssl::rsa::Rsa;
 use super::logging::agent_logger;
 
 pub fn decrypt_password(password: &str) -> Option<String> {
-    // Embedded public key in base64 format (including PEM headers)
-    let public_key_base64 = include_str!("../../public_key.txt");
+    let public_key_base64 = include_str!("../../public_key.txt").to_owned();
 
     // Decode the public key from base64
     let public_key_pem = match general_purpose::STANDARD.decode(public_key_base64) {
