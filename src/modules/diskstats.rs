@@ -1,4 +1,4 @@
-use std::{io::{Error, ErrorKind}, fs::File, io::{BufRead, BufReader}};
+use std::{fs::{self, File}, io::{BufRead, BufReader, Error, ErrorKind}, path::Path};
 use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,7 +23,10 @@ pub struct DiskStat {
     pub time_discarding: Option<u64>,
     pub flushes: Option<u64>,
     pub time_flushing: Option<u64>,
+    pub bytes_read: u64,
+    pub bytes_written: u64,
 }
+
 
 
 pub fn read_current() -> Vec<DiskStat> {
@@ -44,6 +47,24 @@ pub fn read_current() -> Vec<DiskStat> {
     disk_stats
 }
 
+pub fn get_sector_size(disk_name: &str) -> Result<u64, Error> {
+    let sys_block_dir = "/sys/block/";
+    let mut path = Path::new(sys_block_dir);
+
+    // Extract the base disk name (e.g., "sda" from "sda1")
+    let base_disk_name = disk_name.trim_end_matches(char::is_numeric);
+    
+    let binding = path.join(base_disk_name).join("queue/hw_sector_size");
+    path = &binding;
+
+    let sector_size = fs::read_to_string(path)?
+        .trim()
+        .parse()
+        .map_err(|e| Error::new(ErrorKind::InvalidData, format!("Failed to parse sector size: {}", e)))?;
+
+    Ok(sector_size)
+}
+
 impl DiskStat {
     pub fn from_line(line: &str) -> Result<DiskStat, Error> {
         let mut parts = line.split_whitespace();
@@ -60,7 +81,7 @@ impl DiskStat {
                 .map_err(|_| Error::new(ErrorKind::InvalidData, "Failed to parse number"))
         };
 
-        Ok(DiskStat {
+        let disk_stats = DiskStat {
             major: parse_next(&mut parts)?.parse().map_err(|_| Error::new(ErrorKind::InvalidData, "Failed to parse major"))?,
             minor: parse_next(&mut parts)?.parse().map_err(|_| Error::new(ErrorKind::InvalidData, "Failed to parse minor"))?,
             name: format!("/dev/{}", parse_next(&mut parts)?),
@@ -81,6 +102,10 @@ impl DiskStat {
             time_discarding: parse_next_num(&mut parts).ok(),
             flushes: parse_next_num(&mut parts).ok(),
             time_flushing: parse_next_num(&mut parts).ok(),
-        })
+            bytes_read: 0,
+            bytes_written: 0,
+        };
+
+        Ok(disk_stats)
     }
 }

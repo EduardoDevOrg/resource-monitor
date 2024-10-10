@@ -35,6 +35,8 @@ pub fn generate_storage_gauge(storewatch_entry: &Vec<StorewatchEntryLinux>, rmta
             ("time_in_progress", entry.time_in_progress as f64),
             ("weighted_time_in_progress", entry.weighted_time_in_progress as f64),
             ("in_progress", entry.in_progress as f64),
+            ("bytes_read", entry.bytes_read as f64),
+            ("bytes_written", entry.bytes_written as f64),
         ];
 
         for (metric, value) in &metrics {

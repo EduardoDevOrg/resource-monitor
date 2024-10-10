@@ -22,6 +22,8 @@ pub struct StorewatchEntryLinux {
     pub in_progress: u64,
     pub time_in_progress: u64,
     pub weighted_time_in_progress: u64,
+    pub bytes_read: u64,
+    pub bytes_written: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -56,6 +58,8 @@ impl StorewatchEntryLinux {
             in_progress: 0,
             time_in_progress: 0,
             weighted_time_in_progress: 0,
+            bytes_read: 0,
+            bytes_written: 0,
         }
     }
 
@@ -159,6 +163,9 @@ pub fn get_storage_linux(hostname: &str) -> Vec<StorewatchEntryLinux> {
             storage_entry.mounts.push(last_disk.mount_point().to_string_lossy().to_string());
         }
 
+        let sanitized_disk_name = disk_name.replace("/dev/", "");
+        let sector_size = diskstats::get_sector_size(&sanitized_disk_name).unwrap_or(512);
+
         // Calculate average disk stats changes if available
         if let Some(stats) = disk_stats_collection.get(disk_name) {
             if stats.len() > 1 {
@@ -168,6 +175,8 @@ pub fn get_storage_linux(hostname: &str) -> Vec<StorewatchEntryLinux> {
                 let mut total_time_write = 0;
                 let mut total_time_in_progress = 0;
                 let mut total_weighted_time_in_progress = 0;
+                let mut total_bytes_read = 0;
+                let mut total_bytes_written = 0;
 
                 for i in 1..stats.len() {
                     let prev = &stats[i-1];
@@ -178,6 +187,8 @@ pub fn get_storage_linux(hostname: &str) -> Vec<StorewatchEntryLinux> {
                     total_time_write += curr.time_writing.saturating_sub(prev.time_writing);
                     total_time_in_progress += curr.time_in_progress.saturating_sub(prev.time_in_progress);
                     total_weighted_time_in_progress += curr.weighted_time_in_progress.saturating_sub(prev.weighted_time_in_progress);
+                    total_bytes_read += (curr.sectors_read * sector_size).saturating_sub(prev.sectors_read * sector_size);
+                    total_bytes_written += (curr.sectors_written * sector_size).saturating_sub(prev.sectors_written * sector_size);
                 }
 
                 let samples = (stats.len() - 1) as u64;
@@ -188,6 +199,8 @@ pub fn get_storage_linux(hostname: &str) -> Vec<StorewatchEntryLinux> {
                 storage_entry.time_in_progress = total_time_in_progress / samples;
                 storage_entry.weighted_time_in_progress = total_weighted_time_in_progress / samples;
                 storage_entry.in_progress = stats.last().map_or(0, |s| s.in_progress);
+                storage_entry.bytes_read = total_bytes_read / samples;
+                storage_entry.bytes_written = total_bytes_written / samples;
             }
         }
 
