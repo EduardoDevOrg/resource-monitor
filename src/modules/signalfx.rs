@@ -1,9 +1,10 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use reqwest::{blocking::{Client, ClientBuilder}, Error};
 use serde_json::json;
 use super::logging::agent_logger;
 use super::log_entry::LogEntry;
 use super::storewatch::StorewatchEntryLinux;
+
 pub fn get_signalfx_client() -> Result<Client, Error> {
     let client = ClientBuilder::new()
             .danger_accept_invalid_certs(true)
@@ -65,9 +66,7 @@ pub fn generate_storage_gauge(storewatch_entry: &Vec<StorewatchEntryLinux>, rmta
     gauge_json.to_string()
 }
 
-pub fn generate_agent_gauge(log_entry: &LogEntry, rmtag: &str) -> String {
-    let timestamp = log_entry.timestamp * 1000;
-    let host = log_entry.hostname.clone();
+pub fn generate_agent_gauge(log_entry: &LogEntry, hostname: &str, rmtag: &str, timestamp: u64) -> String {
     
     let metrics = [
         ("cpu_usage", log_entry.cpu_usage),
@@ -87,29 +86,27 @@ pub fn generate_agent_gauge(log_entry: &LogEntry, rmtag: &str) -> String {
             "metric": metric,
             "value": value,
             "dimensions": {
-                "host": host,
+                "host": hostname,
                 "environment": rmtag
             },
-            "timestamp": timestamp
+            "timestamp": timestamp * 1000
         })
     }).collect();
 
-    let gauge_json = json!({
-        "gauge": gauge_array
-    });
+    
     agent_logger("debug", "generate_agent_gauge", 
         r#"{
                 "message": "Agent Gauge JSON successfully generated."
             }"#);
-    gauge_json.to_string()
+    serde_json::to_string(&json!({ "gauge": gauge_array })).unwrap_or_default()
 }
 
-pub fn send_gauge(client: &Client, uri: &str, data_json: &str, token: &str, timeout: u64) -> Result<(), Error> {
+pub fn send_gauge(client: &Client, uri: &str, data_json: &str, token: Arc<Option<String>>, timeout: u64) -> Result<(), Error> {
 
     // Send the request
     let response_result = client.post(uri)
         .header("Content-Type", "application/json; charset=utf-8")
-        .header("X-SF-Token", token)
+        .header("X-SF-Token", <std::option::Option<std::string::String> as Clone>::clone(token.as_ref()).unwrap().as_str())
         .body(data_json.to_string())
         .timeout(Duration::from_secs(timeout))
         .send();

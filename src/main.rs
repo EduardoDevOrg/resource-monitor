@@ -1,4 +1,4 @@
-use std::{fs::{self, OpenOptions}, io::BufWriter, net::{TcpStream, ToSocketAddrs, UdpSocket}, path::Path, process};
+use std::{fs::{self, OpenOptions}, io::BufWriter, net::{TcpStream, ToSocketAddrs, UdpSocket}, path::Path, process, sync::Arc};
 use std::io::Write;
 use gethostname::gethostname;
 use modules::config::get_splunk_hostname;
@@ -16,6 +16,7 @@ mod modules {
 use std::env::consts::OS;
 use sysinfo::{Networks, Pid, System};
 use reqwest::blocking::ClientBuilder;
+use threadpool::ThreadPool;
 
 fn check_running_process(exe: &Path, current_pid: &u32) {
     let pid_file_path = exe.join(".agent.pid");
@@ -153,7 +154,7 @@ fn main() {
     }
 
     let signalfx_client = if !configmap.signalfx_uri.is_empty() {
-        Some(modules::signalfx::get_signalfx_client().unwrap())
+        Some(Arc::new(modules::signalfx::get_signalfx_client().unwrap()))
     } else {
         None
     };
@@ -169,10 +170,13 @@ fn main() {
     }
 
     let add_wrapper = configmap.add_wrapper;
+    let signalfx_uri = Arc::new(configmap.signalfx_uri);
+    let signalfx_token = Arc::new(signalfx_token);
+    let pool = ThreadPool::new(2);
     
     if running_module == "agent" {
         let agent_starttime = sys.process(Pid::from_u32(splunk_pid)).unwrap().start_time();
-        let mut log_entry = modules::log_entry::LogEntry::new(hostname.clone(), running_module.clone(), agent_starttime);
+        let mut log_entry = modules::log_entry::LogEntry::new(&hostname, running_module, agent_starttime);
         let interval = configmap.interval;
 
         if OS != "windows" {
@@ -183,11 +187,12 @@ fn main() {
             "file" => {
                 let agent_path = configmap.log_folder;
                 let agent_file = agent_path.join(configmap.file_name);
-                let mut log_writer = BufWriter::new(OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(agent_file.clone())
-                .expect("Failed to open log file"));
+                let file = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&agent_file)
+                    .expect("Failed to open log file");
+                let mut log_writer = BufWriter::new(file);
 
                 loop {
                     log_entry.timestamp = std::time::SystemTime::now()
@@ -205,14 +210,21 @@ fn main() {
                     
                     log_entry.finalize(interval);
     
-                    if !configmap.signalfx_uri.is_empty() {
-                        let signalfx_client = signalfx_client.clone();
-                        let signalfx_uri = configmap.signalfx_uri.clone();
-                        let signalfx_token = signalfx_token.clone();
-                        let gauge_json = modules::signalfx::generate_agent_gauge(&log_entry, &configmap.rmtag);
+                    if let Some(client) = &signalfx_client {
+                        let client_clone = Arc::clone(client);
+                        let uri_clone = Arc::clone(&signalfx_uri);
+                        let token_clone = Arc::clone(&signalfx_token);
+                        let gauge_json = modules::signalfx::generate_agent_gauge(&log_entry, &hostname, &configmap.rmtag, log_entry.timestamp);
     
-                        std::thread::spawn(move || {
-                            let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),3);
+                        pool.execute(move || {
+                            let _ = modules::signalfx::send_gauge(
+                                &client_clone,
+                                &uri_clone,
+                                &gauge_json,
+                                token_clone,
+                                3,
+                            );
+
                         });
                     }
             
@@ -230,6 +242,8 @@ fn main() {
             "tcp" => {
                 let tcp_host = configmap.host.clone();
                 let tcp_port = configmap.port;
+                let tcp_address = format!("{}:{}", tcp_host, tcp_port);
+                let mut stream = TcpStream::connect(tcp_address).expect("Failed to connect to TCP server");
                 
                 loop {
                     log_entry.timestamp = std::time::SystemTime::now()
@@ -247,14 +261,20 @@ fn main() {
         
                     log_entry.finalize(interval);
 
-                    if !configmap.signalfx_uri.is_empty() {
-                        let signalfx_client = signalfx_client.clone();
-                        let signalfx_uri = configmap.signalfx_uri.clone();
-                        let signalfx_token = signalfx_token.clone();
-                        let gauge_json = modules::signalfx::generate_agent_gauge(&log_entry, &configmap.rmtag);
+                    if let Some(client) = &signalfx_client {
+                        let client_clone = Arc::clone(client);
+                        let uri_clone = Arc::clone(&signalfx_uri);
+                        let token_clone = Arc::clone(&signalfx_token);
+                        let gauge_json = modules::signalfx::generate_agent_gauge(&log_entry, &hostname, &configmap.rmtag, log_entry.timestamp);
     
-                        std::thread::spawn(move || {
-                            let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),3);
+                        pool.execute(move || {
+                            let _ = modules::signalfx::send_gauge(
+                                &client_clone,
+                                &uri_clone,
+                                &gauge_json,
+                                token_clone,
+                                3,
+                            );
                         });
                     }
     
@@ -265,10 +285,6 @@ fn main() {
                         log_entry.write_json(&mut json_buffer).expect("Failed to serialize log entry");
                         String::from_utf8(json_buffer).expect("Failed to convert JSON buffer to string")
                     };
-    
-                    // Connect to the TCP server
-                    let tcp_address = format!("{}:{}", tcp_host, tcp_port);
-                    let mut stream = TcpStream::connect(tcp_address).expect("Failed to connect to TCP server");
     
                     stream.write_all(json_string.as_bytes()).expect("Failed to send TCP message");
                     log_entry.reset();
@@ -297,14 +313,20 @@ fn main() {
             
                     log_entry.finalize(interval);
         
-                    if !configmap.signalfx_uri.is_empty() {
-                        let signalfx_client = signalfx_client.clone();
-                        let signalfx_uri = configmap.signalfx_uri.clone();
-                        let signalfx_token = signalfx_token.clone();
-                        let gauge_json = modules::signalfx::generate_agent_gauge(&log_entry, &configmap.rmtag);
-        
-                        std::thread::spawn(move || {
-                            let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),3);
+                    if let Some(client) = &signalfx_client {
+                        let client_clone = Arc::clone(client);
+                        let uri_clone = Arc::clone(&signalfx_uri);
+                        let token_clone = Arc::clone(&signalfx_token);
+                        let gauge_json = modules::signalfx::generate_agent_gauge(&log_entry, &hostname, &configmap.rmtag, log_entry.timestamp);
+    
+                        pool.execute(move || {
+                            let _ = modules::signalfx::send_gauge(
+                                &client_clone,
+                                &uri_clone,
+                                &gauge_json,
+                                token_clone,
+                                3,
+                            );
                         });
                     }
         
@@ -358,14 +380,20 @@ fn main() {
         
                     log_entry.finalize(interval);
     
-                    if !configmap.signalfx_uri.is_empty() {
-                        let signalfx_client = signalfx_client.clone();
-                        let signalfx_uri = configmap.signalfx_uri.clone();
-                        let signalfx_token = signalfx_token.clone();
-                        let gauge_json = modules::signalfx::generate_agent_gauge(&log_entry, &configmap.rmtag);
+                    if let Some(client) = &signalfx_client {
+                        let client_clone = Arc::clone(client);
+                        let uri_clone = Arc::clone(&signalfx_uri);
+                        let token_clone = Arc::clone(&signalfx_token);
+                        let gauge_json = modules::signalfx::generate_agent_gauge(&log_entry, &hostname, &configmap.rmtag, log_entry.timestamp);
     
-                        std::thread::spawn(move || {
-                            let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),3);
+                        pool.execute(move || {
+                            let _ = modules::signalfx::send_gauge(
+                                &client_clone,
+                                &uri_clone,
+                                &gauge_json,
+                                token_clone,
+                                3,
+                            );
                         });
                     }
                     
@@ -425,14 +453,20 @@ fn main() {
                         
                         writeln!(file, "{}", json_string).expect("Failed to write to log file");
                     }
-    
-                    if !configmap.signalfx_uri.is_empty() {
-                        let signalfx_client = signalfx_client.clone();
-                        let signalfx_uri = configmap.signalfx_uri.clone();
-                        let signalfx_token = signalfx_token.clone();
+
+                    if let Some(client) = &signalfx_client {
+                        let client_clone = Arc::clone(client);
+                        let uri_clone = Arc::clone(&signalfx_uri);
+                        let token_clone = Arc::clone(&signalfx_token);
                         let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
     
-                        let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),1);
+                        let _ = modules::signalfx::send_gauge(
+                            &client_clone,
+                            &uri_clone,
+                            &gauge_json,
+                            token_clone,
+                            1,
+                        );
                     }
                 } else {
                     let storewatch_entry = modules::storewatch::get_storage_windows(&hostname);
@@ -460,13 +494,13 @@ fn main() {
                             stream.write_all(json_string.as_bytes()).expect("Failed to send TCP message");
                         }
 
-                        if !configmap.signalfx_uri.is_empty() {
-                            let signalfx_client = signalfx_client.clone();
-                            let signalfx_uri = configmap.signalfx_uri.clone();
-                            let signalfx_token = signalfx_token.clone();
+                        if let Some(client) = &signalfx_client {
+                            let client_clone = Arc::clone(client);
+                            let uri_clone = Arc::clone(&signalfx_uri);
+                            let token_clone = Arc::clone(&signalfx_token);
                             let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
         
-                            let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),1);
+                            let _ = modules::signalfx::send_gauge(&client_clone, &uri_clone, &gauge_json, token_clone,1);
                         }
                     } else {
                         for entry in &storewatch_entry {
@@ -475,14 +509,15 @@ fn main() {
                             stream.write_all(json_string.as_bytes()).expect("Failed to send TCP message");
                         }
 
-                        if !configmap.signalfx_uri.is_empty() {
-                            let signalfx_client = signalfx_client.clone();
-                            let signalfx_uri = configmap.signalfx_uri.clone();
-                            let signalfx_token = signalfx_token.clone();
+                        if let Some(client) = &signalfx_client {
+                            let client_clone = Arc::clone(client);
+                            let uri_clone = Arc::clone(&signalfx_uri);
+                            let token_clone = Arc::clone(&signalfx_token);
                             let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
         
-                            let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),1);
+                            let _ = modules::signalfx::send_gauge(&client_clone, &uri_clone, &gauge_json, token_clone,1);
                         }
+            
                     };
     
                 } else {
@@ -524,13 +559,13 @@ fn main() {
                                 .expect("Failed to send UDP message");
                         }
 
-                        if !configmap.signalfx_uri.is_empty() {
-                            let signalfx_client = signalfx_client.clone();
-                            let signalfx_uri = configmap.signalfx_uri.clone();
-                            let signalfx_token = signalfx_token.clone();
+                        if let Some(client) = &signalfx_client {
+                            let client_clone = Arc::clone(client);
+                            let uri_clone = Arc::clone(&signalfx_uri);
+                            let token_clone = Arc::clone(&signalfx_token);
                             let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
         
-                            let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),1);
+                            let _ = modules::signalfx::send_gauge(&client_clone, &uri_clone, &gauge_json, token_clone,1);
                         }
                     } else {
                         for entry in &storewatch_entry {
@@ -541,13 +576,13 @@ fn main() {
                                 .expect("Failed to send UDP message");
                         }
 
-                        if !configmap.signalfx_uri.is_empty() {
-                            let signalfx_client = signalfx_client.clone();
-                            let signalfx_uri = configmap.signalfx_uri.clone();
-                            let signalfx_token = signalfx_token.clone();
+                        if let Some(client) = &signalfx_client {
+                            let client_clone = Arc::clone(client);
+                            let uri_clone = Arc::clone(&signalfx_uri);
+                            let token_clone = Arc::clone(&signalfx_token);
                             let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
         
-                            let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),1);
+                            let _ = modules::signalfx::send_gauge(&client_clone, &uri_clone, &gauge_json, token_clone,1);
                         }
                     };
 
@@ -609,14 +644,16 @@ fn main() {
                         }
                     }
 
-                    if !configmap.signalfx_uri.is_empty() {
-                        let signalfx_client = signalfx_client.clone();
-                        let signalfx_uri = configmap.signalfx_uri.clone();
-                        let signalfx_token = signalfx_token.clone();
+                    if let Some(client) = &signalfx_client {
+                        let client_clone = Arc::clone(client);
+                        let uri_clone = Arc::clone(&signalfx_uri);
+                        let token_clone = Arc::clone(&signalfx_token);
                         let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
-
-                        let _ = modules::signalfx::send_gauge(&signalfx_client.unwrap(), &signalfx_uri, &gauge_json, signalfx_token.as_ref().unwrap(),1);
+    
+                        let _ = modules::signalfx::send_gauge(&client_clone, &uri_clone, &gauge_json, token_clone,1);
                     }
+
+                
                 } else {
                     let storewatch_entry = modules::storewatch::get_storage_windows(&hostname);
 

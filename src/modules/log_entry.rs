@@ -6,7 +6,7 @@ use std::io::Write;
 use super::logging::agent_logger;
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct LogEntry {
+pub struct LogEntry<'a> {
     pub timestamp: u64,
     pub cpu_usage: f64,
     pub total_mem: u64,
@@ -24,9 +24,9 @@ pub struct LogEntry {
     pub tx_dropped_baseline: u64,
     #[serde(skip_serializing)]
     pub rx_dropped_baseline: u64,
-    pub hostname: String,
+    pub hostname: &'a str,
     pub uptime: u64,
-    pub component: String,
+    pub component: &'a str,
     pub agent_starttime: u64,
 }
 
@@ -41,8 +41,8 @@ impl Formatter for CustomFormatter {
     }
 }
 
-impl LogEntry {
-    pub fn new(hostname: String, component: String, agent_starttime: u64) -> Self {
+impl<'a> LogEntry<'a> {
+    pub fn new(hostname: &'a str, component: &'a str, agent_starttime: u64) -> Self {
         Self {
             timestamp: 0,
             cpu_usage: 0.0,
