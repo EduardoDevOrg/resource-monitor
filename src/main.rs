@@ -127,7 +127,7 @@ fn check_running_process(exe: &Path, current_pid: &u32) {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut input = String::new();
-    let mut sys = System::new_all();
+    let sys = System::new_all();
     let mut networks = Networks::new_with_refreshed_list();
     let running_module = &args[1];
     
@@ -173,7 +173,7 @@ fn main() {
     let signalfx_uri = Arc::new(configmap.signalfx_uri);
     let signalfx_token = Arc::new(signalfx_token);
     let pool = ThreadPool::new(2);
-    
+
     if running_module == "agent" {
         let agent_starttime = sys.process(Pid::from_u32(splunk_pid)).unwrap().start_time();
         let mut log_entry = modules::log_entry::LogEntry::new(&hostname, running_module, agent_starttime);
@@ -200,11 +200,12 @@ fn main() {
                         .expect("Time went backwards")
                         .as_secs();
                     log_entry.uptime = System::uptime();
+                    let mut system = System::new();
             
                     for _ in 0..interval {
-                        sys.refresh_all();
+                        system.refresh_all();
                         networks.refresh();
-                        log_entry.update(&sys, &networks);
+                        log_entry.update(&system, &networks);
                         std::thread::sleep(std::time::Duration::from_secs(1));
                     }
                     
@@ -251,11 +252,12 @@ fn main() {
                     .expect("Time went backwards")
                     .as_secs();
                     log_entry.uptime = System::uptime();
+                    let mut system = System::new();
         
                     for _ in 0..interval {
-                        sys.refresh_all();
+                        system.refresh_all();
                         networks.refresh();
-                        log_entry.update(&sys, &networks);
+                        log_entry.update(&system, &networks);
                         std::thread::sleep(std::time::Duration::from_secs(1));
                     }
         
@@ -303,11 +305,12 @@ fn main() {
                     .expect("Time went backwards")
                     .as_secs();
                     log_entry.uptime = System::uptime();
+                    let mut system = System::new();
         
                     for _ in 0..interval {
-                        sys.refresh_all();
+                        system.refresh_all();
                         networks.refresh();
-                        log_entry.update(&sys, &networks);
+                        log_entry.update(&system, &networks);
                         std::thread::sleep(std::time::Duration::from_secs(1));
                     }
             
@@ -370,11 +373,12 @@ fn main() {
                     .expect("Time went backwards")
                     .as_secs();
                     log_entry.uptime = System::uptime();
+                    let mut system = System::new();
         
                     for _ in 0..interval {
-                        sys.refresh_all();
+                        system.refresh_all();
                         networks.refresh();
-                        log_entry.update(&sys, &networks);
+                        log_entry.update(&system, &networks);
                         std::thread::sleep(std::time::Duration::from_secs(1));
                     }
         

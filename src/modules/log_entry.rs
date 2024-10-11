@@ -86,7 +86,7 @@ impl<'a> LogEntry<'a> {
     }
 
 
-    pub fn update(&mut self, sys: &System, networks: &Networks) {
+    pub fn update(&mut self, system: &System, networks: &Networks) {
         let mut total_tx_dropped = 0;
         let mut total_rx_dropped = 0;
 
@@ -118,16 +118,16 @@ impl<'a> LogEntry<'a> {
         self.rx_dropped_baseline = total_rx_dropped;
 
 
-        for process in sys.processes().values() {
+        for process in system.processes().values() {
             let disk_usage = process.disk_usage();
             self.disk_read += disk_usage.read_bytes;
             self.disk_write += disk_usage.written_bytes;
         }
 
-        self.cpu_usage += sys.global_cpu_usage() as f64;
+        self.cpu_usage += system.global_cpu_usage() as f64;
 
-        let total_mem = sys.total_memory();
-        let used_mem = sys.used_memory();
+        let total_mem = system.total_memory();
+        let used_mem = system.used_memory();
         self.total_mem = total_mem; // Set to the current value
         self.used_mem = used_mem; // Set to the current value
         self.mem_usage += used_mem as f64 / total_mem as f64 * 100.0;
