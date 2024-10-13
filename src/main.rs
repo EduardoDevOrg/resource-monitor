@@ -200,7 +200,7 @@ fn main() {
                         .expect("Time went backwards")
                         .as_secs();
                     log_entry.uptime = System::uptime();
-                    let mut system = System::new();
+                    let mut system = System::new_all();
             
                     for _ in 0..interval {
                         system.refresh_all();
@@ -252,7 +252,7 @@ fn main() {
                     .expect("Time went backwards")
                     .as_secs();
                     log_entry.uptime = System::uptime();
-                    let mut system = System::new();
+                    let mut system = System::new_all();
         
                     for _ in 0..interval {
                         system.refresh_all();
@@ -305,7 +305,7 @@ fn main() {
                     .expect("Time went backwards")
                     .as_secs();
                     log_entry.uptime = System::uptime();
-                    let mut system = System::new();
+                    let mut system = System::new_all();
         
                     for _ in 0..interval {
                         system.refresh_all();
@@ -373,7 +373,7 @@ fn main() {
                     .expect("Time went backwards")
                     .as_secs();
                     log_entry.uptime = System::uptime();
-                    let mut system = System::new();
+                    let mut system = System::new_all();
         
                     for _ in 0..interval {
                         system.refresh_all();
