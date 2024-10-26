@@ -95,7 +95,7 @@ fn read_file(path: &Path, last_modified_time: &mut std::time::SystemTime) -> Has
 }
 
 fn visit_dirs(dir: &Path, module: &str) -> Option<PathBuf> {
-    if ["agent", "storewatch", "startup", "hostinfo"].contains(&module) {
+    if ["agent", "storewatch", "startup", "hostinfo", "splunkd_tracker"].contains(&module) {
         // Search in the provided directory
         let conf_path = dir.join("agent.conf");
         if conf_path.exists() {
@@ -172,9 +172,17 @@ pub fn get_splunk_hostname(splunk_root: &Path) -> String {
 pub fn get_splunk_pid(splunk_root: &Path) -> u32 {
     let pid_file = splunk_root.join("var").join("run").join("splunk").join("splunkd.pid");
     if pid_file.exists() {
-        if let Ok(contents) = fs::read_to_string(pid_file) {
+        if let Ok(contents) = fs::read_to_string(pid_file.clone()) { // Clone here
             if let Some(line) = contents.lines().next() {
-                return line.parse::<u32>().unwrap();
+                match line.trim().parse::<u32>() {
+                    Ok(pid) => return pid,
+                    Err(e) => {
+                        agent_logger("warn", "get_splunk_pid", 
+                            &format!(r#"{{"message": "Failed to parse PID from file: {}", "error": "{}"}}"#, 
+                            pid_file.display(), e));
+                        return 0;
+                    }
+                }
             }
         }
     }
@@ -191,7 +199,7 @@ fn parse_bool(value: &str) -> Option<bool> {
 
 pub fn get_configmap(module: &str) -> ConfigEntry {
     match module {
-        "startup" | "agent" | "storewatch" | "hostinfo" => {
+        "startup" | "agent" | "storewatch" | "hostinfo" | "splunkd_tracker" => {
             let (bin_folder, app_folder, root_folder) = get_app_dirs();
             let config_data = get_config_path(&bin_folder, module);
 
@@ -251,7 +259,7 @@ pub fn get_configmap(module: &str) -> ConfigEntry {
                 .unwrap_or(&"".to_string())
                 .to_string();
 
-            let localapi = config_data.get("hostinfo")
+            let localapi = config_data.get(module)
                 .and_then(|s| s.get("localapi"))
                 .unwrap_or(&"127.0.0.1:8089".to_string())
                 .to_string();
