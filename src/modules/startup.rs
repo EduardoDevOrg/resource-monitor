@@ -67,11 +67,11 @@ fn get_splunk_version(splunk_root: &Path) -> String {
 
 fn get_instance_id(splunk_root: &Path) -> String {
     let instance_id_path = splunk_root.join("etc/instance.cfg");
-    if instance_id_path.exists() {
-        let instance_id_content = std::fs::read_to_string(&instance_id_path).unwrap();
+    
+    if let Ok(instance_id_content) = std::fs::read_to_string(&instance_id_path) {
         for line in instance_id_content.lines() {
-            if line.trim().starts_with("guid =") {
-                return line.split('=').nth(1).unwrap().trim().to_string();
+            if let Some(guid) = line.trim().strip_prefix("guid = ").map(str::trim) {
+                return guid.to_string();
             }
         }
         agent_logger("error", "get_instance_id", 
@@ -79,10 +79,9 @@ fn get_instance_id(splunk_root: &Path) -> String {
                 "message": "No instance ID found in instance.cfg",
                 "module": "startup"
             }"#);
-        String::from("non_splunk")
-    } else {
-        String::from("non_splunk")
     }
+    
+    String::from("non_splunk")
 }
 
 fn create_stopswitch(switchpath: &Path) {    
