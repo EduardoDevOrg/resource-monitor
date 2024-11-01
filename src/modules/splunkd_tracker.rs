@@ -158,16 +158,23 @@ pub fn get_network_stats(pid: Pid) -> NetworkStats {
 }
 
 pub fn network_change(pid: Pid, old_network_stats: &mut NetworkStats) -> NetworkStats {
-    let mut new_network_stats = get_network_stats(pid);
-    let new_baseline = new_network_stats.clone();
-    new_network_stats.packets_in -= old_network_stats.packets_in;
-    new_network_stats.packets_out -= old_network_stats.packets_out;
-    new_network_stats.bytes_in -= old_network_stats.bytes_in;
-    new_network_stats.bytes_out -= old_network_stats.bytes_out;
-    new_network_stats.tx_dropped -= old_network_stats.tx_dropped;
-    new_network_stats.rx_dropped -= old_network_stats.rx_dropped;
-    *old_network_stats = new_baseline;
-    new_network_stats
+    let new_network_stats = get_network_stats(pid);
+    
+    // Calculate the difference in network statistics.  Avoid unnecessary cloning.
+    let diff = NetworkStats {
+        packets_in: new_network_stats.packets_in - old_network_stats.packets_in,
+        packets_out: new_network_stats.packets_out - old_network_stats.packets_out,
+        bytes_in: new_network_stats.bytes_in - old_network_stats.bytes_in,
+        bytes_out: new_network_stats.bytes_out - old_network_stats.bytes_out,
+        tx_dropped: new_network_stats.tx_dropped - old_network_stats.tx_dropped,
+        rx_dropped: new_network_stats.rx_dropped - old_network_stats.rx_dropped,
+        open_connections: new_network_stats.open_connections - old_network_stats.open_connections,
+    };
+
+    // Update the old stats with the new baseline.
+    *old_network_stats = new_network_stats;
+    
+    diff
 }
 
 pub fn pid_compare(old_pid: u32, pid: u32) -> Option<SplunkEntry> {
