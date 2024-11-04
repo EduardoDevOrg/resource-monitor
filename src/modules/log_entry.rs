@@ -1,9 +1,9 @@
 use std::{fs, path::Path};
 use serde::{Serialize, Deserialize};
-use serde_json::ser::Formatter;
 use sysinfo::{System, Networks};
 use std::io::Write;
 use super::logging::agent_logger;
+use super::generics::CustomFormatter;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LogEntry<'a> {
@@ -18,27 +18,20 @@ pub struct LogEntry<'a> {
     pub bytes_out: u64,
     pub packets_in: u64,
     pub packets_out: u64,
-    pub tx_dropped: u64,
-    pub rx_dropped: u64,
+    #[cfg(target_os = "linux")]
+    pub tx_dropped: Option<u64>,
+    #[cfg(target_os = "linux")]
+    pub rx_dropped: Option<u64>,
     #[serde(skip_serializing)]
-    pub tx_dropped_baseline: u64,
+    #[cfg(target_os = "linux")]
+    pub tx_dropped_baseline: Option<u64>,
     #[serde(skip_serializing)]
-    pub rx_dropped_baseline: u64,
+    #[cfg(target_os = "linux")]
+    pub rx_dropped_baseline: Option<u64>,
     pub hostname: &'a str,
     pub uptime: u64,
     pub component: &'a str,
     pub agent_starttime: u64,
-}
-
-struct CustomFormatter;
-
-impl Formatter for CustomFormatter {
-    fn write_f64<W>(&mut self, writer: &mut W, value: f64) -> std::io::Result<()>
-    where
-        W: Write + ?Sized,
-    {
-        write!(writer, "{:.3}", value)
-    }
 }
 
 impl<'a> LogEntry<'a> {
@@ -55,10 +48,14 @@ impl<'a> LogEntry<'a> {
             bytes_out: 0,
             packets_in: 0,
             packets_out: 0,
-            tx_dropped: 0,
-            rx_dropped: 0,
-            tx_dropped_baseline: 0,
-            rx_dropped_baseline: 0,
+            #[cfg(target_os = "linux")]
+            tx_dropped: Some(0),
+            #[cfg(target_os = "linux")]
+            rx_dropped: Some(0),
+            #[cfg(target_os = "linux")]
+            tx_dropped_baseline: Some(0),
+            #[cfg(target_os = "linux")]
+            rx_dropped_baseline: Some(0),
             uptime: 0,
             hostname,
             component,
@@ -66,6 +63,7 @@ impl<'a> LogEntry<'a> {
         }
     }
 
+    #[cfg(target_os = "linux")]
     pub fn calculate_baseline(&mut self, networks: &Networks) {
         for (interface_name, _network) in networks.iter() {
             let tx_dropped_path = format!("/sys/class/net/{}/statistics/tx_dropped", interface_name);
@@ -73,50 +71,62 @@ impl<'a> LogEntry<'a> {
 
             if let Ok(tx_dropped_str) = fs::read_to_string(&tx_dropped_path) {
                 if let Ok(tx_dropped_value) = tx_dropped_str.trim().parse::<u64>() {
-                    self.tx_dropped_baseline += tx_dropped_value; // Set initial baseline
+                    if let Some(ref mut baseline) = self.tx_dropped_baseline {
+                        *baseline += tx_dropped_value;
+                    }
                 }
             }
 
             if let Ok(rx_dropped_str) = fs::read_to_string(&rx_dropped_path) {
                 if let Ok(rx_dropped_value) = rx_dropped_str.trim().parse::<u64>() {
-                    self.rx_dropped_baseline += rx_dropped_value; // Set initial baseline
+                    if let Some(ref mut baseline) = self.rx_dropped_baseline {
+                        *baseline += rx_dropped_value;
+                    }
                 }
             }
         }
     }
 
-
     pub fn update(&mut self, system: &System, networks: &Networks) {
         let mut total_tx_dropped = 0;
         let mut total_rx_dropped = 0;
 
-        for (interface_name, network) in networks.iter() {
+        for (_, network) in networks.iter() {
             self.bytes_in += network.received();
             self.bytes_out += network.transmitted();
             self.packets_in += network.packets_received();
             self.packets_out += network.packets_transmitted();
 
-            let tx_dropped_path = format!("/sys/class/net/{}/statistics/tx_dropped", interface_name);
-            let rx_dropped_path = format!("/sys/class/net/{}/statistics/rx_dropped", interface_name);
+            #[cfg(target_os = "linux")]
+            {
+                let tx_dropped_path = format!("/sys/class/net/{}/statistics/tx_dropped", interface_name);
+                let rx_dropped_path = format!("/sys/class/net/{}/statistics/rx_dropped", interface_name);
 
-            if let Ok(tx_dropped_str) = fs::read_to_string(&tx_dropped_path) {
-                if let Ok(tx_dropped_value) = tx_dropped_str.trim().parse::<u64>() {
-                    total_tx_dropped += tx_dropped_value; // Track total dropped in this period
+                if let Ok(tx_dropped_str) = fs::read_to_string(&tx_dropped_path) {
+                    if let Ok(tx_dropped_value) = tx_dropped_str.trim().parse::<u64>() {
+                        total_tx_dropped += tx_dropped_value;
+                    }
                 }
-            }
 
-            if let Ok(rx_dropped_str) = fs::read_to_string(&rx_dropped_path) {
-                if let Ok(rx_dropped_value) = rx_dropped_str.trim().parse::<u64>() {
-                    total_rx_dropped += rx_dropped_value; // Track total dropped in this period
+                if let Ok(rx_dropped_str) = fs::read_to_string(&rx_dropped_path) {
+                    if let Ok(rx_dropped_value) = rx_dropped_str.trim().parse::<u64>() {
+                        total_rx_dropped += rx_dropped_value;
+                    }
                 }
             }
         }
 
-        self.tx_dropped += total_tx_dropped.saturating_sub(self.tx_dropped_baseline);
-        self.rx_dropped += total_rx_dropped.saturating_sub(self.rx_dropped_baseline);
-        self.tx_dropped_baseline = total_tx_dropped;
-        self.rx_dropped_baseline = total_rx_dropped;
-
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(ref mut tx_dropped) = self.tx_dropped {
+                *tx_dropped += total_tx_dropped.saturating_sub(self.tx_dropped_baseline.unwrap_or(0));
+            }
+            if let Some(ref mut rx_dropped) = self.rx_dropped {
+                *rx_dropped += total_rx_dropped.saturating_sub(self.rx_dropped_baseline.unwrap_or(0));
+            }
+            self.tx_dropped_baseline = Some(total_tx_dropped);
+            self.rx_dropped_baseline = Some(total_rx_dropped);
+        }
 
         for process in system.processes().values() {
             let disk_usage = process.disk_usage();
@@ -128,8 +138,8 @@ impl<'a> LogEntry<'a> {
 
         let total_mem = system.total_memory();
         let used_mem = system.used_memory();
-        self.total_mem = total_mem; // Set to the current value
-        self.used_mem = used_mem; // Set to the current value
+        self.total_mem = total_mem;
+        self.used_mem = used_mem;
         self.mem_usage += used_mem as f64 / total_mem as f64 * 100.0;
     }
 
@@ -153,8 +163,11 @@ impl<'a> LogEntry<'a> {
         self.packets_out = 0;
         self.disk_read = 0;
         self.disk_write = 0;
-        self.tx_dropped = 0;
-        self.rx_dropped = 0;
+        #[cfg(target_os = "linux")]
+        {
+            self.tx_dropped = Some(0);
+            self.rx_dropped = Some(0);
+        }
     }
 
     pub fn write_json<W: Write>(&self, writer: W) -> serde_json::Result<()> {
@@ -163,22 +176,19 @@ impl<'a> LogEntry<'a> {
     }
 
     pub fn add_wrapper(&self, index: &str, source: &str, sourcetype: &str, host: String) -> String {
-        let log_entry_json = serde_json::to_string(self).expect("Failed to serialize log entry");
+        let entry = serde_json::to_string(self).expect("Failed to serialize log entry");
 
         let wrapper = serde_json::json!({
             "index": index,
             "source": source,
             "sourcetype": sourcetype,
             "host": host,
-            "event": serde_json::from_str::<serde_json::Value>(&log_entry_json).expect("Failed to parse log entry JSON")
+            "event": serde_json::from_str::<serde_json::Value>(&entry).expect("Failed to parse log entry JSON")
         });
 
         serde_json::to_string(&wrapper).expect("Failed to serialize wrapped log entry")
     }
-
 }
-
-
 
 pub fn check_log_file_size(log_path: &Path) {
     let metadata = fs::metadata(log_path).expect("Unable to get log file metadata");

@@ -3,7 +3,7 @@ use reqwest::{blocking::{Client, ClientBuilder}, Error};
 use serde_json::json;
 use super::logging::agent_logger;
 use super::log_entry::LogEntry;
-use super::storewatch::StorewatchEntryLinux;
+use super::storewatch::StorewatchEntry;
 use super::splunkd_tracker::{SplunkdTracker, SplunkEntry};
 
 pub fn get_signalfx_client() -> Result<Client, Error> {
@@ -19,7 +19,7 @@ pub fn get_signalfx_client() -> Result<Client, Error> {
     Ok(client)
 }
 
-pub fn generate_storage_gauge(storewatch_entry: &Vec<StorewatchEntryLinux>, rmtag: &str) -> String {
+pub fn generate_storage_gauge(storewatch_entry: &Vec<StorewatchEntry>, rmtag: &str) -> String {
     let mut gauge_array = Vec::new();
 
     for entry in storewatch_entry {
@@ -78,7 +78,9 @@ pub fn generate_agent_gauge(log_entry: &LogEntry, hostname: &str, rmtag: &str, t
         ("bytes_out", log_entry.bytes_out as f64),
         ("packets_in", log_entry.packets_in as f64),
         ("packets_out", log_entry.packets_out as f64),
+        #[cfg(target_os = "linux")]
         ("tx_dropped", log_entry.tx_dropped as f64),
+        #[cfg(target_os = "linux")]
         ("rx_dropped", log_entry.rx_dropped as f64),
     ];
 
