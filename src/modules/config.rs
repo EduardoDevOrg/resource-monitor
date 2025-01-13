@@ -95,7 +95,7 @@ fn read_file(path: &Path, last_modified_time: &mut std::time::SystemTime) -> Has
 }
 
 fn visit_dirs(dir: &Path, module: &str) -> Option<PathBuf> {
-    if ["agent", "storewatch", "startup", "hostinfo", "splunkd_tracker"].contains(&module) {
+    if ["agent", "storewatch", "startup", "hostinfo"].contains(&module) {
         // Search in the provided directory
         let conf_path = dir.join("agent.conf");
         if conf_path.exists() {
@@ -113,7 +113,7 @@ fn visit_dirs(dir: &Path, module: &str) -> Option<PathBuf> {
         }
 
         // If no file is found, print a message and return None
-        agent_logger("debug", "visit_dirs", 
+        agent_logger("debug", "config","visit_dirs", 
         &format!( 
             r#"{{
                 "message": "No configuration file found for module '{}' in '{}' or '{}' or '{}'",
@@ -155,7 +155,7 @@ pub fn get_splunk_hostname(splunk_root: &Path) -> String {
                 return hostname.to_string();
             }
         }
-        agent_logger("debug", "get_splunk_hostname", 
+        agent_logger("debug", "config","get_splunk_hostname", 
         &format!( 
             r#"{{
                 "message": "No hostname found in inputs.conf or server.conf",
@@ -177,7 +177,7 @@ pub fn get_splunk_pid(splunk_root: &Path) -> u32 {
                 match line.trim().parse::<u32>() {
                     Ok(pid) => return pid,
                     Err(e) => {
-                        agent_logger("warn", "get_splunk_pid", 
+                        agent_logger("warn", "config","get_splunk_pid", 
                             &format!(r#"{{"message": "Failed to parse PID from file: {}", "error": "{}"}}"#, 
                             pid_file.display(), e));
                         return 0;
@@ -283,7 +283,7 @@ pub fn get_configmap(module: &str) -> ConfigEntry {
                     (log_folder, String::new(), String::new())
                 },
                 "http" => {
-                    agent_logger("error", "get_configmap", &format!(r#"{{"message": "{} type is not supported yet", "module": "{}"}}"#, config_type, module));
+                    agent_logger("error", "config","get_configmap", &format!(r#"{{"message": "{} type is not supported yet", "module": "{}"}}"#, config_type, module));
                     process::exit(1);
                 },
                 "tcp" => (PathBuf::new(), location, String::new()),
@@ -314,7 +314,7 @@ pub fn get_configmap(module: &str) -> ConfigEntry {
             }
         },
         _ => {
-            agent_logger("error", "get_configmap", &format!(r#"{{"message": "Invalid module '{}'. Valid modules are: startup, agent, storewatch"}}"#, module));
+            agent_logger("error", "config","get_configmap", &format!(r#"{{"message": "Invalid module '{}'. Valid modules are: startup, agent, storewatch"}}"#, module));
             process::exit(1);
         }
     }

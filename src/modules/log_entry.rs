@@ -185,7 +185,7 @@ pub fn check_log_file_size(log_path: &Path) {
     let file_size = metadata.len();
     if file_size > 10 * 1024 * 1024 {
         fs::write(log_path, "").expect("Unable to clear log file");
-        agent_logger("info", "check_log_file_size", 
+        agent_logger("info", "log_entry","check_log_file_size", 
         r#"{
                 "message": "Agent log was rotated!"
             }"#);
