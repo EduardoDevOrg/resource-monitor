@@ -4,7 +4,6 @@ use serde_json::json;
 use super::logging::agent_logger;
 use super::log_entry::LogEntry;
 use super::storewatch::StorewatchEntryLinux;
-use super::splunkd_tracker::{SplunkdTracker, SplunkEntry};
 
 pub fn get_signalfx_client() -> Result<Client, Error> {
     let client = ClientBuilder::new()
@@ -12,7 +11,7 @@ pub fn get_signalfx_client() -> Result<Client, Error> {
             .build()
             .expect("Failed to build client");
     
-        agent_logger("info", "get_signalfx_client", 
+        agent_logger("info", "signalfx","get_signalfx_client", 
             r#"{
                     "message": "Client successfully created."
                 }"#);
@@ -102,68 +101,6 @@ pub fn generate_agent_gauge(log_entry: &LogEntry, hostname: &str, rmtag: &str, t
     serde_json::to_string(&json!({ "gauge": gauge_array })).unwrap_or_default()
 }
 
-pub fn generate_spltracker_gauge(entry: &SplunkdTracker, hostname: &str, rmtag: &str, timestamp: u64) -> String {
-    
-    let metrics = [
-        ("cpu_usage", entry.cpu_usage),
-        ("mem_usage", entry.mem_usage),
-        ("disk_read", entry.disk_read as f64),
-        ("disk_write", entry.disk_write as f64),
-        ("bytes_in", entry.bytes_in as f64),
-        ("bytes_out", entry.bytes_out as f64),
-        ("packets_in", entry.packets_in as f64),
-        ("packets_out", entry.packets_out as f64),
-        ("tx_dropped", entry.tx_dropped as f64),
-        ("rx_dropped", entry.rx_dropped as f64),
-        ("open_connections", entry.open_connections as f64),
-        ("run_time", entry.run_time as f64),
-        ("tasks", entry.tasks as f64),
-        ("pid", entry.pid as f64),
-    ];
-
-    let gauge_array: Vec<_> = metrics.iter().map(|(metric, value)| {
-        json!({
-            "metric": metric,
-            "value": value,
-            "dimensions": {
-                "host": hostname,
-                "environment": rmtag
-            },
-            "timestamp": timestamp * 1000
-        })
-    }).collect();
-
-    
-    // agent_logger("debug", "generate_agent_gauge", 
-    //     r#"{
-    //             "message": "Agent Gauge JSON successfully generated."
-    //         }"#);
-    serde_json::to_string(&json!({ "gauge": gauge_array })).unwrap_or_default()
-}
-
-pub fn generate_spltracker_event(entry: &SplunkEntry, hostname: &str, rmtag: &str, timestamp: u64) -> String {
-
-    let event_array = json!([
-        {
-            "category": entry.category,
-            "eventType": entry.eventtype,
-            "dimensions": {
-                "environment": rmtag,
-                "service": "Splunkd",
-                "host": hostname
-            },
-            "properties": {
-                "message": entry.message
-            },
-            "timestamp": timestamp * 1000
-        }
-    ]);
-
-    event_array.to_string()
-            
-}
-
-
 pub fn send_gauge(client: &Client, uri: &str, data_json: &str, token: Arc<Option<String>>, timeout: u64) -> Result<(), Error> {
 
     // Send the request
@@ -176,7 +113,7 @@ pub fn send_gauge(client: &Client, uri: &str, data_json: &str, token: Arc<Option
 
     match response_result {
         Ok(_) => {
-            agent_logger("info", "send_gauge", 
+            agent_logger("debug", "signalfx","send_gauge", 
             r#"{
                     "message": "Data successfully sent."
                 }"#);
@@ -185,13 +122,13 @@ pub fn send_gauge(client: &Client, uri: &str, data_json: &str, token: Arc<Option
         Err(e) => {
             // Check if the error is a timeout
             if e.is_timeout() {
-                agent_logger("error", "send_gauge", 
+                agent_logger("error", "signalfx","send_gauge", 
                 r#"{
                         "message": "Request timed out.",
                         "error": "Timeout!"
                     }"#);
             } else {
-                agent_logger("error", "send_gauge", 
+                agent_logger("error", "signalfx","send_gauge", 
                 r#"{
                         "message": "Data could not be sent."
                     }"#);
@@ -201,39 +138,39 @@ pub fn send_gauge(client: &Client, uri: &str, data_json: &str, token: Arc<Option
     }
 }
 
-pub fn send_event(client: &Client, uri: &str, data_json: &str, token: Arc<Option<String>>, timeout: u64) -> Result<(), Error> {
+// pub fn send_event(client: &Client, uri: &str, data_json: &str, token: Arc<Option<String>>, timeout: u64) -> Result<(), Error> {
 
-    let response_result = client.post(format!("{}event", uri))
-        .header("Content-Type", "application/json; charset=utf-8")
-        .header("X-SF-Token", <std::option::Option<std::string::String> as Clone>::clone(token.as_ref()).unwrap().as_str())
-        .body(data_json.to_string())
-        .timeout(Duration::from_secs(timeout))
-        .send();
+//     let response_result = client.post(format!("{}event", uri))
+//         .header("Content-Type", "application/json; charset=utf-8")
+//         .header("X-SF-Token", <std::option::Option<std::string::String> as Clone>::clone(token.as_ref()).unwrap().as_str())
+//         .body(data_json.to_string())
+//         .timeout(Duration::from_secs(timeout))
+//         .send();
 
-        match response_result {
-            Ok(_) => {
-                agent_logger("info", "send_event", 
-                r#"{
-                        "message": "Data successfully sent."
-                    }"#);
-                Ok(())
-            },
-            Err(e) => {
-                // Check if the error is a timeout
-                if e.is_timeout() {
-                    agent_logger("error", "send_event", 
-                    r#"{
-                            "message": "Request timed out.",
-                            "error": "Timeout!"
-                        }"#);
-                } else {
-                    agent_logger("error", "send_event", 
-                    r#"{
-                            "message": "Data could not be sent."
-                        }"#);
-                }
-                Err(e)
-            }
-        }
+//         match response_result {
+//             Ok(_) => {
+//                 agent_logger("info", "send_event", 
+//                 r#"{
+//                         "message": "Data successfully sent."
+//                     }"#);
+//                 Ok(())
+//             },
+//             Err(e) => {
+//                 // Check if the error is a timeout
+//                 if e.is_timeout() {
+//                     agent_logger("error", "send_event", 
+//                     r#"{
+//                             "message": "Request timed out.",
+//                             "error": "Timeout!"
+//                         }"#);
+//                 } else {
+//                     agent_logger("error", "send_event", 
+//                     r#"{
+//                             "message": "Data could not be sent."
+//                         }"#);
+//                 }
+//                 Err(e)
+//             }
+//         }
     
-}
+// }

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use super::config::get_app_dirs;
 use super::log_entry::check_log_file_size;
 
-pub fn agent_logger(log_level: &str, module: &str, msg_json: &str) {
+pub fn agent_logger(log_level: &str, module: &str, function: &str, msg_json: &str) {
     let current_epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("Time went backwards");
@@ -30,6 +30,7 @@ pub fn agent_logger(log_level: &str, module: &str, msg_json: &str) {
         "timestamp": current_epoch.as_secs(),
         "component": "agent_logger",
         "module": module,
+        "function": function,
         "log_level": log_level.to_uppercase(),
     });
 

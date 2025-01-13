@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 use sysinfo::Disks;
 use super::diskstats;
-
+use super::logging::agent_logger;
 #[derive(Serialize, Deserialize, Debug)]
 pub struct StorewatchEntryLinux {
     pub timestamp: u64,
@@ -112,9 +112,21 @@ pub fn get_storage_linux(hostname: &str) -> Vec<StorewatchEntryLinux> {
     let mut disk_stats_collection: HashMap<String, Vec<diskstats::DiskStat>> = HashMap::new();
     let mut disk_info_collection: HashMap<String, Vec<(u64, u64, u64, f64)>> = HashMap::new();
     let mut disk_data = Disks::new_with_refreshed_list();
+    if disk_data.list().is_empty() {
+        agent_logger("error", "storewatch", "get_storage_linux",
+    r#"{
+        "message": "Failed to retrieve disk data"
+    }"#
+    );
+    } else {
+        agent_logger("info", "storewatch", "get_storage_linux",
+    r#"{
+        "message": "Successfully retrieved disk data."
+    }"#);
+    }
 
     for i in 0..11 {  // We now collect 11 samples to calculate 10 differences
-        disk_data.refresh();
+        disk_data.refresh(true);
         let disks = disk_data.list();
         for disk in disks {
             let disk_name = disk.name().to_string_lossy().to_string();

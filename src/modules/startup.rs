@@ -74,10 +74,9 @@ fn get_instance_id(splunk_root: &Path) -> String {
                 return line.split('=').nth(1).unwrap().trim().to_string();
             }
         }
-        agent_logger("error", "get_instance_id", 
+        agent_logger("error", "startup", "get_instance_id",
         r#"{
-                "message": "No instance ID found in instance.cfg",
-                "module": "startup"
+                "message": "No instance ID found in instance.cfg"
             }"#);
         String::from("non_splunk")
     } else {
@@ -96,10 +95,9 @@ pub fn check_stopswitch(switchpath: &Path) {
     let stopswitch_path = switchpath.join(".stopswitch");
     if stopswitch_path.exists() {
         fs::remove_file(&stopswitch_path).expect("Failed to remove .stopswitch file");
-        agent_logger("info", "check_stopswitch", 
+        agent_logger("info", "startup", "check_stopswitch",
         r#"{
-                "message": "Stopswitch file detected and removed. Exiting process.",
-                "module": "startup"
+                "message": "Stopswitch file detected and removed. Exiting process."
             }"#);
         process::exit(0);
     }
@@ -111,6 +109,10 @@ pub fn startup_log(hostname: &str, app_folder: &Path) -> Result<StartupEntry, Bo
         .expect("Time went backwards")
         .as_secs();
 
+
+    agent_logger("debug", "startup", "startup_log", r#"{
+                "message": "Starting startup log."
+            }"#);
     let splunk_root;
     let mut is_splunk = false;
     let app_folder_str = app_folder.to_string_lossy();
@@ -147,6 +149,10 @@ pub fn startup_log(hostname: &str, app_folder: &Path) -> Result<StartupEntry, Bo
 
     if is_splunk {
         let app_path = app_folder.join("bin");
+        agent_logger(
+            "INFO", "startup", "startup_log", r#"{
+                "message": "Startup_log completed successfully. Stopswitch file created."
+            }"#);
         create_stopswitch(&app_path);
     }
 

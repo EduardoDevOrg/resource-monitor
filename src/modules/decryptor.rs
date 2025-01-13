@@ -9,7 +9,7 @@ pub fn decrypt_password(password: &str) -> Option<String> {
     let public_key_pem = match general_purpose::STANDARD.decode(public_key_base64) {
         Ok(pem) => pem,
         Err(_) => {
-            agent_logger("error", "decrypt_password", 
+            agent_logger("error", "decryptor","decrypt_pubkey", 
             r#"{
                     "message": "Error decoding public key"
                     "module": "decryptor"
@@ -22,7 +22,7 @@ pub fn decrypt_password(password: &str) -> Option<String> {
     let public_key = match Rsa::public_key_from_pem(&public_key_pem) {
         Ok(key) => key,
         Err(_) => {
-            agent_logger("error", "public_key_from_pem", 
+            agent_logger("error", "decryptor","public_key_from_pem", 
             r#"{
                     "message": "Error retrieving public key"
                 }"#);
@@ -35,7 +35,7 @@ pub fn decrypt_password(password: &str) -> Option<String> {
     let encrypted_data = match general_purpose::STANDARD.decode(password) {
         Ok(data) => data,
         Err(_) => {
-            agent_logger("error", "decode", 
+            agent_logger("error", "decryptor","decrypt_password", 
             r#"{
                     "message": "Error decoding encrypted data"
                 }"#);
@@ -60,7 +60,7 @@ pub fn decrypt_password(password: &str) -> Option<String> {
             match String::from_utf8(decrypted_data) {
                 Ok(verified_string) => Some(verified_string),
                 Err(_) => {
-                    agent_logger("error", "public_decrypt", 
+                    agent_logger("error", "decryptor","public_decrypt", 
                     r#"{
                             "message": "Error converting decrypted data to string"
                         }"#);
@@ -69,7 +69,7 @@ pub fn decrypt_password(password: &str) -> Option<String> {
             }
         }
         Err(_) => {
-            agent_logger("error", "public_decrypt", 
+            agent_logger("error", "decryptor","public_decrypt", 
             r#"{
                     "message": "Error decrypting data",
                 }"#);
