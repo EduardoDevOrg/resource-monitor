@@ -1,4 +1,4 @@
-use std::{fs::{self, OpenOptions}, io::BufWriter, net::{TcpStream, ToSocketAddrs, UdpSocket}, path::Path, process, sync::Arc};
+use std::{fs::{self, OpenOptions}, io::BufWriter, net::{TcpStream, ToSocketAddrs, UdpSocket}, path::Path, process::{self}, sync::Arc};
 use std::io::Write;
 use gethostname::gethostname;
 use modules::{config::get_splunk_hostname, logging::agent_logger};
@@ -35,6 +35,17 @@ fn check_running_process(exe: &Path, current_pid: &u32, module: &str) {
     let mut system = System::new_all();
     system.refresh_all();
 
+    let mut matching_processes = Vec::new();
+    for (pid, process) in system.processes() {
+        if process.pid() != Pid::from_u32(*current_pid)
+            && process.parent().map_or(true, |parent| parent != Pid::from_u32(*current_pid))
+            && process.exe().map(|exe| exe == executable).unwrap_or(false)
+            && process.cmd().get(1).map(|arg| arg == module).unwrap_or(false)
+        {
+            matching_processes.push((pid.as_u32(), process.start_time()));
+        }
+    }
+
     if !Path::new(pid_file).exists() {
         // Create the PID file and write the appropriate PID
         let mut file = OpenOptions::new()
@@ -43,17 +54,6 @@ fn check_running_process(exe: &Path, current_pid: &u32, module: &str) {
             .truncate(true)
             .open(pid_file)
             .expect("Failed to create or open PID file");
-
-        let mut matching_processes = Vec::new();
-        for (pid, process) in system.processes() {
-            if process.pid() != Pid::from_u32(*current_pid)
-                && process.parent().map_or(true, |parent| parent != Pid::from_u32(*current_pid))
-                && process.exe().map(|exe| exe == executable).unwrap_or(false)
-                && process.cmd().get(1).map(|arg| arg == module).unwrap_or(false)
-            {
-                matching_processes.push((pid.as_u32(), process.start_time()));
-            }
-        }
 
         // Find the oldest process
         if let Some((oldest_pid, _)) = matching_processes.into_iter()
@@ -83,40 +83,69 @@ fn check_running_process(exe: &Path, current_pid: &u32, module: &str) {
             }
         };
 
-        if system.process(Pid::from_u32(old_pid)).is_some() {
+        let current_process_exe = if system.process(Pid::from_u32(old_pid)).is_some() {
+            system.process(Pid::from_u32(old_pid)).unwrap().exe()
+        } else {
+            None
+        };
+        
+
+        if current_process_exe == Some(&executable) {
             modules::logging::agent_logger("info", "main_process", "check_process",
             &format!(
                 r#"{{
                     "message": "Process with PID {} is running",
                     "pid": {}
                 }}"#,
-                old_pid, old_pid
+                old_pid, &current_pid
             ));
             process::exit(0);
         } else {
-            modules::logging::agent_logger("info", "main_process", "check_process",
-            &format!(
-                r#"{{
-                    "message": "Process with PID {} is not running",
-                    "pid": {}
-                }}"#,
-                old_pid, old_pid
-            ));
-            let mut file = OpenOptions::new()
+            if let Some((oldest_pid, _)) = matching_processes.into_iter()
+            .min_by_key(|&(pid, start_time)| (start_time, pid)) 
+            {
+                modules::logging::agent_logger("info", "main_process","check_process", 
+                &format!(
+                    r#"{{
+                        "message": "Found running process with PID {}",
+                        "pid": {}
+                    }}"#,
+                    oldest_pid, &current_pid
+                ));
+                let mut file = OpenOptions::new()
                 .write(true)
                 .truncate(true)
                 .open(pid_file)
                 .expect("Failed to open PID file");
-            let current_pid = process::id();
-            writeln!(file, "{}", current_pid).expect("Failed to write to PID file");
-            modules::logging::agent_logger("info", "main_process", "check_process",
-            &format!(
-                r#"{{
-                    "message": "PID {} is written to file.",
-                    "pid": {}
-                }}"#,
-                current_pid, current_pid
-            ));
+
+                writeln!(file, "{}", &oldest_pid).expect("Failed to write to PID file");
+                modules::logging::agent_logger("info", "main_process", "check_process",
+                &format!(
+                    r#"{{
+                        "message": "PID {} is written to file.",
+                        "pid": {}
+                    }}"#
+                    ,&oldest_pid, &current_pid
+                ));
+                process::exit(0);
+            } else {
+                let mut file = OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(pid_file)
+                .expect("Failed to open PID file");
+
+                modules::logging::agent_logger("info", "main_process", "check_process",
+                &format!(
+                    r#"{{
+                        "message": "No running processes found. Writing PID {} to file.",
+                        "pid": {}
+                    }}"#,
+                    &current_pid, &current_pid
+                ));
+                writeln!(file, "{}", &current_pid).expect("Failed to write to PID file");
+
+            }
         }
     }
 }   
@@ -167,7 +196,7 @@ fn main() {
         None
     };
 
-    if running_module == "agent" || running_module == "splunkd_tracker" {
+    if running_module == "agent" {
         check_running_process(&configmap.bin_folder, &current_pid, running_module);
     }
 
@@ -457,36 +486,27 @@ fn main() {
                 .open(storewatch_file)
                 .expect("Failed to open storewatch log file");
 
-                if OS != "windows" {
-                    let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
+                let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
                     
-                    for entry in &storewatch_entry {
-                        let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
-                        
-                        writeln!(file, "{}", json_string).expect("Failed to write to log file");
-                    }
+                for entry in &storewatch_entry {
+                    let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
+                    
+                    writeln!(file, "{}", json_string).expect("Failed to write to log file");
+                }
 
-                    if let Some(client) = &signalfx_client {
-                        let client_clone = Arc::clone(client);
-                        let uri_clone = Arc::clone(&signalfx_uri);
-                        let token_clone = Arc::clone(&signalfx_token);
-                        let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
-    
-                        let _ = modules::signalfx::send_gauge(
-                            &client_clone,
-                            &uri_clone,
-                            &gauge_json,
-                            token_clone,
-                            1,
-                        );
-                    }
-                } else {
-                    let storewatch_entry = modules::storewatch::get_storage_windows(&hostname);
-    
-                    for entry in storewatch_entry {
-                        let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
-                        writeln!(file, "{}", json_string).expect("Failed to write to log file");
-                    } 
+                if let Some(client) = &signalfx_client {
+                    let client_clone = Arc::clone(client);
+                    let uri_clone = Arc::clone(&signalfx_uri);
+                    let token_clone = Arc::clone(&signalfx_token);
+                    let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
+
+                    let _ = modules::signalfx::send_gauge(
+                        &client_clone,
+                        &uri_clone,
+                        &gauge_json,
+                        token_clone,
+                        1,
+                    );
                 }
                 file.flush().expect("Failed to flush log file");
             }
@@ -496,8 +516,7 @@ fn main() {
                 let tcp_address = format!("{}:{}", tcp_host, tcp_port);
                 let mut stream = TcpStream::connect(tcp_address).expect("Failed to connect to TCP server");
 
-                if OS != "windows" {
-                    let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
+                let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
                     
                     if add_wrapper {
                         for entry in &storewatch_entry {
@@ -531,24 +550,6 @@ fn main() {
                         }
             
                     };
-    
-                } else {
-                    let storewatch_entry = modules::storewatch::get_storage_windows(&hostname);
-    
-                    if add_wrapper {
-                        
-                        for entry in storewatch_entry {
-                            let json_string = entry.add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone());
-                            stream.write_all(json_string.as_bytes()).expect("Failed to send TCP message");
-                        }
-                    } else {
-                        
-                        for entry in storewatch_entry {
-                            let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
-                            stream.write_all(json_string.as_bytes()).expect("Failed to send TCP message");
-                        }
-                    };   
-                }
 
             }
             "udp" => {
@@ -561,60 +562,41 @@ fn main() {
                     .next()
                     .expect("No addresses found for hostname");
 
-                if OS != "windows" {
-                    let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
-                    
-                    if add_wrapper {
-                        for entry in &storewatch_entry {
-                            let json_string = entry.add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone());
-                            socket.send_to(json_string.as_bytes(), resolved_address)
-                                .expect("Failed to send UDP message");
-                        }
+                let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
+                
+                if add_wrapper {
+                    for entry in &storewatch_entry {
+                        let json_string = entry.add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone());
+                        socket.send_to(json_string.as_bytes(), resolved_address)
+                            .expect("Failed to send UDP message");
+                    }
 
-                        if let Some(client) = &signalfx_client {
-                            let client_clone = Arc::clone(client);
-                            let uri_clone = Arc::clone(&signalfx_uri);
-                            let token_clone = Arc::clone(&signalfx_token);
-                            let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
-        
-                            let _ = modules::signalfx::send_gauge(&client_clone, &uri_clone, &gauge_json, token_clone,1);
-                        }
-                    } else {
-                        for entry in &storewatch_entry {
-
-                            let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
-                            
-                            socket.send_to(json_string.as_bytes(), resolved_address)
-                                .expect("Failed to send UDP message");
-                        }
-
-                        if let Some(client) = &signalfx_client {
-                            let client_clone = Arc::clone(client);
-                            let uri_clone = Arc::clone(&signalfx_uri);
-                            let token_clone = Arc::clone(&signalfx_token);
-                            let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
-        
-                            let _ = modules::signalfx::send_gauge(&client_clone, &uri_clone, &gauge_json, token_clone,1);
-                        }
-                    };
-
+                    if let Some(client) = &signalfx_client {
+                        let client_clone = Arc::clone(client);
+                        let uri_clone = Arc::clone(&signalfx_uri);
+                        let token_clone = Arc::clone(&signalfx_token);
+                        let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
+    
+                        let _ = modules::signalfx::send_gauge(&client_clone, &uri_clone, &gauge_json, token_clone,1);
+                    }
                 } else {
-                    let storewatch_entry = modules::storewatch::get_storage_windows(&hostname);
+                    for entry in &storewatch_entry {
 
-                    if add_wrapper {
-                        for entry in storewatch_entry {
-                            let json_string = entry.add_wrapper(&configmap.index, &configmap.source, &configmap.sourcetype, hostname.clone());
-                            socket.send_to(json_string.as_bytes(), resolved_address)
-                                .expect("Failed to send UDP message");
-                        }
-                    } else {
-                        for entry in storewatch_entry {
-                            let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
-                            socket.send_to(json_string.as_bytes(), resolved_address)
-                                .expect("Failed to send UDP message");
-                        }
-                    };   
-                }
+                        let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
+                        
+                        socket.send_to(json_string.as_bytes(), resolved_address)
+                            .expect("Failed to send UDP message");
+                    }
+
+                    if let Some(client) = &signalfx_client {
+                        let client_clone = Arc::clone(client);
+                        let uri_clone = Arc::clone(&signalfx_uri);
+                        let token_clone = Arc::clone(&signalfx_token);
+                        let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
+    
+                        let _ = modules::signalfx::send_gauge(&client_clone, &uri_clone, &gauge_json, token_clone,1);
+                    }
+                };
             }
             "splunkapi" => {
                 let client = ClientBuilder::new()
@@ -629,68 +611,39 @@ fn main() {
                 ("host", hostname.as_str()),
                 ];
 
-                if OS != "windows" {
-                    let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
-                    
-                    for entry in &storewatch_entry {
-                        
-                        let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
-                        let payload = json_string;
-                        match client.post(api_url)
-                        .query(&params)
-                        .body(payload)
-                        .timeout(std::time::Duration::from_secs(5))
-                        .send() {
-                            Ok(_) => {
-                            }
-                            Err(err) => {
-                                modules::logging::agent_logger("error", "main_process", "splunkapi_storewatch",
-                                &format!(
-                                    r#"{{
-                                        "message": "Error sending request",
-                                        "error": "{}"
-                                    }}"#,
-                                    err
-                                ));
-                            }
-                        }
-                    }
-
-                    if let Some(client) = &signalfx_client {
-                        let client_clone = Arc::clone(client);
-                        let uri_clone = Arc::clone(&signalfx_uri);
-                        let token_clone = Arc::clone(&signalfx_token);
-                        let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
-    
-                        let _ = modules::signalfx::send_gauge(&client_clone, &uri_clone, &gauge_json, token_clone,1);
-                    }
-
+            let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
                 
-                } else {
-                    let storewatch_entry = modules::storewatch::get_storage_windows(&hostname);
-
-                    for entry in storewatch_entry {
-                        let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
-                        let payload = json_string;
-                        match client.post(api_url)
-                        .query(&params)
-                        .body(payload)
-                        .timeout(std::time::Duration::from_secs(5))
-                        .send() {
-                            Ok(_) => {
-                            }
-                            Err(err) => {
-                                modules::logging::agent_logger("error", "main_process", "splunkapi_storewatch",
-                                &format!(
-                                    r#"{{
-                                        "message": "Error sending request",
-                                        "error": "{}"
-                                    }}"#,
-                                    err
-                                ));
-                            }
+                for entry in &storewatch_entry {
+                    
+                    let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
+                    let payload = json_string;
+                    match client.post(api_url)
+                    .query(&params)
+                    .body(payload)
+                    .timeout(std::time::Duration::from_secs(5))
+                    .send() {
+                        Ok(_) => {
                         }
-                    } 
+                        Err(err) => {
+                            modules::logging::agent_logger("error", "main_process", "splunkapi_storewatch",
+                            &format!(
+                                r#"{{
+                                    "message": "Error sending request",
+                                    "error": "{}"
+                                }}"#,
+                                err
+                            ));
+                        }
+                    }
+                }
+
+                if let Some(client) = &signalfx_client {
+                    let client_clone = Arc::clone(client);
+                    let uri_clone = Arc::clone(&signalfx_uri);
+                    let token_clone = Arc::clone(&signalfx_token);
+                    let gauge_json = modules::signalfx::generate_storage_gauge(&storewatch_entry, &configmap.rmtag);
+
+                    let _ = modules::signalfx::send_gauge(&client_clone, &uri_clone, &gauge_json, token_clone,1);
                 }
             }
             "hec" => {
