@@ -4,15 +4,24 @@ version = "0.1.0"
 edition = "2021"
 
 [profile.release]
-strip = true
-opt-level = "s"
-lto = true
+# strip = true
+# opt-level = "s"
+# lto = true
 # debug = true
+opt-level = 3
+debug = "none"
+strip = "symbols"
+debug-assertions = false
+overflow-checks = false
+lto = "fat"
+panic = "abort"
+incremental = false
+codegen-units = 1
 
 [dependencies]
 sysinfo = "0.33.1"
-gethostname = "0.5.0"
-serde_json = "1.0.135"
+gethostname = "1.0.0"
+serde_json = "1.0.138"
 serde = { version = "1.0.217", features = ["derive"] }
 pnet = "0.35.0"
 base64 = "0.22.1"
@@ -21,7 +30,7 @@ reqwest = { version = "0.12.12", features = ["blocking", "json"] }
 threadpool = "1.8.1"
 
 [target.x86_64-pc-windows-msvc.dependencies]
-openssl = { version = "0.10.68", features = ["vendored"] }
+openssl = { version = "0.10.70", features = ["vendored"] }
 
 [target.'cfg(unix)'.dependencies]
-openssl = { version = "0.10.68", features = ["vendored"] }
+openssl = { version = "0.10.70", features = ["vendored"] }

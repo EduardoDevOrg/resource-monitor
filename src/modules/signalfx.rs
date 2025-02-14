@@ -93,18 +93,13 @@ pub fn generate_agent_gauge(log_entry: &LogEntry, hostname: &str, rmtag: &str, t
         })
     }).collect();
 
-    
-    // agent_logger("debug", "generate_agent_gauge", 
-    //     r#"{
-    //             "message": "Agent Gauge JSON successfully generated."
-    //         }"#);
     serde_json::to_string(&json!({ "gauge": gauge_array })).unwrap_or_default()
 }
 
 pub fn send_gauge(client: &Client, uri: &str, data_json: &str, token: Arc<Option<String>>, timeout: u64) -> Result<(), Error> {
-
+    
     // Send the request
-    let response_result = client.post(format!("{}datapoint", uri))
+    let response_result = client.post(uri.to_string())
         .header("Content-Type", "application/json; charset=utf-8")
         .header("X-SF-Token", <std::option::Option<std::string::String> as Clone>::clone(token.as_ref()).unwrap().as_str())
         .body(data_json.to_string())
