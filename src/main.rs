@@ -144,12 +144,10 @@ fn check_running_process(exe: &Path, current_pid: &u32, module: &str) {
                     &current_pid, &current_pid
                 ));
                 writeln!(file, "{}", &current_pid).expect("Failed to write to PID file");
-
             }
         }
     }
-}   
-
+} 
 
 
 fn main() {
@@ -662,7 +660,7 @@ fn main() {
         } else {
             startup_string.as_ref().unwrap().as_json()
         };
-
+        
         match configmap.log_type.as_str() 
         {
             "file" => {

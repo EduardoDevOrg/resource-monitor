@@ -314,7 +314,7 @@ pub fn get_configmap(module: &str) -> ConfigEntry {
             }
         },
         _ => {
-            agent_logger("error", "config","get_configmap", &format!(r#"{{"message": "Invalid module '{}'. Valid modules are: startup, agent, storewatch"}}"#, module));
+            agent_logger("error", "config","get_configmap", &format!(r#"{{"message": "Invalid module '{}'. Valid modules are: startup, agent, storewatch, hostinfo"}}"#, module));
             process::exit(1);
         }
     }
