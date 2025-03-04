@@ -67,28 +67,41 @@ impl<'a> LogEntry<'a> {
     }
 
     pub fn calculate_baseline(&mut self, networks: &Networks) {
-        for (interface_name, _network) in networks.iter() {
-            let tx_dropped_path = format!("/sys/class/net/{}/statistics/tx_dropped", interface_name);
-            let rx_dropped_path = format!("/sys/class/net/{}/statistics/rx_dropped", interface_name);
+        let mut tx_dropped_path = String::with_capacity(64);
+        let mut rx_dropped_path = String::with_capacity(64);
+        
+        for (interface_name, _) in networks.iter() {
+            tx_dropped_path.clear();
+            rx_dropped_path.clear();
+            
+            tx_dropped_path.push_str("/sys/class/net/");
+            tx_dropped_path.push_str(interface_name);
+            tx_dropped_path.push_str("/statistics/tx_dropped");
+            
+            rx_dropped_path.push_str("/sys/class/net/");
+            rx_dropped_path.push_str(interface_name);
+            rx_dropped_path.push_str("/statistics/rx_dropped");
 
             if let Ok(tx_dropped_str) = fs::read_to_string(&tx_dropped_path) {
                 if let Ok(tx_dropped_value) = tx_dropped_str.trim().parse::<u64>() {
-                    self.tx_dropped_baseline += tx_dropped_value; // Set initial baseline
+                    self.tx_dropped_baseline += tx_dropped_value;
                 }
             }
 
             if let Ok(rx_dropped_str) = fs::read_to_string(&rx_dropped_path) {
                 if let Ok(rx_dropped_value) = rx_dropped_str.trim().parse::<u64>() {
-                    self.rx_dropped_baseline += rx_dropped_value; // Set initial baseline
+                    self.rx_dropped_baseline += rx_dropped_value;
                 }
             }
         }
     }
 
-
     pub fn update(&mut self, system: &System, networks: &Networks) {
         let mut total_tx_dropped = 0;
         let mut total_rx_dropped = 0;
+        
+        let mut tx_dropped_path = String::with_capacity(64);
+        let mut rx_dropped_path = String::with_capacity(64);
 
         for (interface_name, network) in networks.iter() {
             self.bytes_in += network.received();
@@ -96,18 +109,26 @@ impl<'a> LogEntry<'a> {
             self.packets_in += network.packets_received();
             self.packets_out += network.packets_transmitted();
 
-            let tx_dropped_path = format!("/sys/class/net/{}/statistics/tx_dropped", interface_name);
-            let rx_dropped_path = format!("/sys/class/net/{}/statistics/rx_dropped", interface_name);
+            tx_dropped_path.clear();
+            rx_dropped_path.clear();
+            
+            tx_dropped_path.push_str("/sys/class/net/");
+            tx_dropped_path.push_str(interface_name);
+            tx_dropped_path.push_str("/statistics/tx_dropped");
+            
+            rx_dropped_path.push_str("/sys/class/net/");
+            rx_dropped_path.push_str(interface_name);
+            rx_dropped_path.push_str("/statistics/rx_dropped");
 
             if let Ok(tx_dropped_str) = fs::read_to_string(&tx_dropped_path) {
                 if let Ok(tx_dropped_value) = tx_dropped_str.trim().parse::<u64>() {
-                    total_tx_dropped += tx_dropped_value; // Track total dropped in this period
+                    total_tx_dropped += tx_dropped_value;
                 }
             }
 
             if let Ok(rx_dropped_str) = fs::read_to_string(&rx_dropped_path) {
                 if let Ok(rx_dropped_value) = rx_dropped_str.trim().parse::<u64>() {
-                    total_rx_dropped += rx_dropped_value; // Track total dropped in this period
+                    total_rx_dropped += rx_dropped_value;
                 }
             }
         }
@@ -117,25 +138,33 @@ impl<'a> LogEntry<'a> {
         self.tx_dropped_baseline = total_tx_dropped;
         self.rx_dropped_baseline = total_rx_dropped;
 
-
+        let mut total_disk_read = 0;
+        let mut total_disk_write = 0;
+        
         for process in system.processes().values() {
             let disk_usage = process.disk_usage();
-            self.disk_read += disk_usage.read_bytes;
-            self.disk_write += disk_usage.written_bytes;
+            total_disk_read += disk_usage.read_bytes;
+            total_disk_write += disk_usage.written_bytes;
         }
+        
+        self.disk_read += total_disk_read;
+        self.disk_write += total_disk_write;
 
         self.cpu_usage += system.global_cpu_usage() as f64;
-
-        let total_mem = system.total_memory();
-        let used_mem = system.used_memory();
-        self.total_mem = total_mem; // Set to the current value
-        self.used_mem = used_mem; // Set to the current value
-        self.mem_usage += used_mem as f64 / total_mem as f64 * 100.0;
+        self.total_mem = system.total_memory();
+        self.used_mem = system.used_memory();
+        self.mem_usage += self.used_mem as f64 / self.total_mem as f64 * 100.0;
     }
 
     pub fn finalize(&mut self, sample_count: u64) {
-        self.cpu_usage /= sample_count as f64;
-        self.mem_usage /= sample_count as f64;
+        if sample_count == 0 {
+            return;
+        }
+        
+        let count = sample_count as f64;
+        self.cpu_usage /= count;
+        self.mem_usage /= count;
+        
         self.bytes_in /= sample_count;
         self.bytes_out /= sample_count;
         self.packets_in /= sample_count;
@@ -163,31 +192,43 @@ impl<'a> LogEntry<'a> {
     }
 
     pub fn add_wrapper(&self, index: &str, source: &str, sourcetype: &str, host: String) -> String {
-        let log_entry_json = serde_json::to_string(self).expect("Failed to serialize log entry");
-
+        let mut json_buffer = Vec::with_capacity(1024);
+        self.write_json(&mut json_buffer).expect("Failed to serialize log entry");
+        
+        let event_value = serde_json::from_slice::<serde_json::Value>(&json_buffer)
+            .expect("Failed to parse log entry JSON");
+        
         let wrapper = serde_json::json!({
             "index": index,
             "source": source,
             "sourcetype": sourcetype,
             "host": host,
-            "event": serde_json::from_str::<serde_json::Value>(&log_entry_json).expect("Failed to parse log entry JSON")
+            "event": event_value
         });
 
         serde_json::to_string(&wrapper).expect("Failed to serialize wrapped log entry")
     }
-
 }
 
-
+const LOG_FILE_SIZE_LIMIT: u64 = 10 * 1024 * 1024;
 
 pub fn check_log_file_size(log_path: &Path) {
-    let metadata = fs::metadata(log_path).expect("Unable to get log file metadata");
-    let file_size = metadata.len();
-    if file_size > 10 * 1024 * 1024 {
-        fs::write(log_path, "").expect("Unable to clear log file");
-        agent_logger("info", "log_entry","check_log_file_size", 
-        r#"{
-                "message": "Agent log was rotated!"
-            }"#);
+    match fs::metadata(log_path) {
+        Ok(metadata) => {
+            let file_size = metadata.len();
+            if file_size > LOG_FILE_SIZE_LIMIT {
+                if let Err(e) = fs::write(log_path, "") {
+                    agent_logger("error", "log_entry", "check_log_file_size", 
+                        &format!(r#"{{"message": "Failed to clear log file", "error": "{}"}}"#, e));
+                } else {
+                    agent_logger("info", "log_entry", "check_log_file_size", 
+                        r#"{"message": "Agent log was rotated!"}"#);
+                }
+            }
+        },
+        Err(e) => {
+            agent_logger("error", "log_entry", "check_log_file_size", 
+                &format!(r#"{{"message": "Unable to get log file metadata", "error": "{}"}}"#, e));
+        }
     }
 }

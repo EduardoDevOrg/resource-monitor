@@ -38,7 +38,7 @@ fn check_running_process(exe: &Path, current_pid: &u32, module: &str) {
     let mut matching_processes = Vec::new();
     for (pid, process) in system.processes() {
         if process.pid() != Pid::from_u32(*current_pid)
-            && process.parent().map_or(true, |parent| parent != Pid::from_u32(*current_pid))
+            && process.parent().is_none_or(|parent| parent != Pid::from_u32(*current_pid))
             && process.exe().map(|exe| exe == executable).unwrap_or(false)
             && process.cmd().get(1).map(|arg| arg == module).unwrap_or(false)
         {
@@ -100,51 +100,49 @@ fn check_running_process(exe: &Path, current_pid: &u32, module: &str) {
                 old_pid, &current_pid
             ));
             process::exit(0);
+        } else if let Some((oldest_pid, _)) = matching_processes.into_iter()
+        .min_by_key(|&(pid, start_time)| (start_time, pid)) 
+        {
+            modules::logging::agent_logger("info", "main_process","check_process", 
+            &format!(
+                r#"{{
+                    "message": "Found running process with PID {}",
+                    "pid": {}
+                }}"#,
+                oldest_pid, &current_pid
+            ));
+            let mut file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(pid_file)
+            .expect("Failed to open PID file");
+
+            writeln!(file, "{}", &oldest_pid).expect("Failed to write to PID file");
+            modules::logging::agent_logger("info", "main_process", "check_process",
+            &format!(
+                r#"{{
+                    "message": "PID {} is written to file.",
+                    "pid": {}
+                }}"#
+                ,&oldest_pid, &current_pid
+            ));
+            process::exit(0);
         } else {
-            if let Some((oldest_pid, _)) = matching_processes.into_iter()
-            .min_by_key(|&(pid, start_time)| (start_time, pid)) 
-            {
-                modules::logging::agent_logger("info", "main_process","check_process", 
-                &format!(
-                    r#"{{
-                        "message": "Found running process with PID {}",
-                        "pid": {}
-                    }}"#,
-                    oldest_pid, &current_pid
-                ));
-                let mut file = OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(pid_file)
-                .expect("Failed to open PID file");
+            let mut file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(pid_file)
+            .expect("Failed to open PID file");
 
-                writeln!(file, "{}", &oldest_pid).expect("Failed to write to PID file");
-                modules::logging::agent_logger("info", "main_process", "check_process",
-                &format!(
-                    r#"{{
-                        "message": "PID {} is written to file.",
-                        "pid": {}
-                    }}"#
-                    ,&oldest_pid, &current_pid
-                ));
-                process::exit(0);
-            } else {
-                let mut file = OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(pid_file)
-                .expect("Failed to open PID file");
-
-                modules::logging::agent_logger("info", "main_process", "check_process",
-                &format!(
-                    r#"{{
-                        "message": "No running processes found. Writing PID {} to file.",
-                        "pid": {}
-                    }}"#,
-                    &current_pid, &current_pid
-                ));
-                writeln!(file, "{}", &current_pid).expect("Failed to write to PID file");
-            }
+            modules::logging::agent_logger("info", "main_process", "check_process",
+            &format!(
+                r#"{{
+                    "message": "No running processes found. Writing PID {} to file.",
+                    "pid": {}
+                }}"#,
+                &current_pid, &current_pid
+            ));
+            writeln!(file, "{}", &current_pid).expect("Failed to write to PID file");
         }
     }
 } 
@@ -390,6 +388,7 @@ fn main() {
             "splunkapi" => {
                 let client = ClientBuilder::new()
                 .danger_accept_invalid_certs(true)
+                .timeout(std::time::Duration::from_secs(5))
                 .build()
                 .expect("Failed to build client");
                 let api_url = &configmap.api;
@@ -401,18 +400,33 @@ fn main() {
                 ("host", hostname.as_str()),
                 ];
 
+                // Pre-allocate buffer to avoid repeated allocations
+                let mut json_buffer = Vec::with_capacity(4096);
+                
+                // Initialize system once
+                let mut system = System::new_all();
+                let mut networks = Networks::new_with_refreshed_list();
+
                 loop {
+                    // Reset buffer without deallocating memory
+                    json_buffer.clear();
+                    
                     log_entry.timestamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .expect("Time went backwards")
-                    .as_secs();
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .expect("Time went backwards")
+                        .as_secs();
                     log_entry.uptime = System::uptime();
-                    let mut system = System::new_all();
-                    let mut networks = Networks::new_with_refreshed_list();
+                    
+                    // Reset system data collectors before the interval
+                    log_entry.reset();
             
                     for _ in 0..interval {
-                        system.refresh_all();
+                        // Only refresh what we need
+                        system.refresh_cpu_all();
+                        system.refresh_memory();
+                        system.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, sysinfo::ProcessRefreshKind::everything());
                         networks.refresh(true);
+                        
                         log_entry.update(&system, &networks);
                         std::thread::sleep(std::time::Duration::from_secs(1));
                     }
@@ -436,29 +450,35 @@ fn main() {
                         });
                     }
                     
-                    let mut json_buffer = Vec::new();
+                    // Reuse the buffer
                     log_entry.write_json(&mut json_buffer).expect("Failed to serialize log entry");
-                    let payload = String::from_utf8(json_buffer).expect("Failed to convert JSON buffer to string");
+                    let payload = String::from_utf8_lossy(&json_buffer).to_string();
                     
+                    // Use a single match with fewer allocations
                     match client.post(api_url)
-                    .query(&params)
-                    .body(payload)
-                    .timeout(std::time::Duration::from_secs(5))
-                    .send() {
-                        Ok(_) => {
-                        }
-                    Err(err) => {
-                        modules::logging::agent_logger("error", "main_process", "splunkapi_agent",
-                        &format!(
-                            r#"{{
-                                "message": "Error sending request",
-                                "error": "{}"
-                            }}"#,
-                            err
-                        ));
+                        .query(&params)
+                        .body(payload)
+                        .send() 
+                    {
+                        Ok(_) => {},
+                        Err(err) => {
+                            let error_msg = if err.is_timeout() {
+                                "Request timed out"
+                            } else if err.is_connect() {
+                                "Connection error"
+                            } else {
+                                "Error sending request"
+                            };
+                            
+                            modules::logging::agent_logger(
+                                "error", 
+                                "main_process", 
+                                "splunkapi_agent",
+                                &format!(r#"{{"message": "{}", "error": "{}"}}"#, error_msg, err)
+                            );
                         }
                     }
-                    log_entry.reset();
+                    
                     modules::startup::check_stopswitch(&configmap.bin_folder);
                 }
             }
