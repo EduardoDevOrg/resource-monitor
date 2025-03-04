@@ -5,25 +5,37 @@ use super::logging::agent_logger;
 use super::log_entry::LogEntry;
 use super::storewatch::StorewatchEntryLinux;
 
+// Create a client with connection pooling enabled
 pub fn get_signalfx_client() -> Result<Client, Error> {
     let client = ClientBuilder::new()
             .danger_accept_invalid_certs(true)
-            .build()
-            .expect("Failed to build client");
+            .pool_max_idle_per_host(10) // Enable connection pooling
+            .pool_idle_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(5))
+            .build()?;
     
-        agent_logger("info", "signalfx","get_signalfx_client", 
-            r#"{
-                    "message": "Client successfully created."
-                }"#);
+    agent_logger("info", "signalfx", "get_signalfx_client", 
+        r#"{"message": "Client successfully created."}"#);
     Ok(client)
 }
 
+// Pre-allocate capacity for gauge arrays to avoid reallocations
 pub fn generate_storage_gauge(storewatch_entry: &Vec<StorewatchEntryLinux>, rmtag: &str) -> String {
-    let mut gauge_array = Vec::new();
+    // Pre-allocate with estimated capacity
+    let capacity = storewatch_entry.len() * 12; // 12 metrics per entry
+    let mut gauge_array = Vec::with_capacity(capacity);
 
     for entry in storewatch_entry {
         let timestamp = entry.timestamp * 1000;
-        let host = entry.hostname.clone();
+        let host = &entry.hostname;
+        
+        // Create dimensions object once to reuse
+        let dimensions = json!({
+            "host": host,
+            "environment": rmtag,
+            "disk_name": entry.disk_name,
+            "mounts": entry.mounts.join(";")
+        });
     
         let metrics = [
             ("disk_usage", entry.disk_usage),
@@ -44,12 +56,7 @@ pub fn generate_storage_gauge(storewatch_entry: &Vec<StorewatchEntryLinux>, rmta
             gauge_array.push(json!({
                 "metric": metric,
                 "value": value,
-                "dimensions": {
-                    "host": host,
-                    "environment": rmtag,
-                    "disk_name": entry.disk_name,
-                    "mounts": entry.mounts.join(";")
-                },
+                "dimensions": dimensions,
                 "timestamp": timestamp
             }));
         }
@@ -59,14 +66,20 @@ pub fn generate_storage_gauge(storewatch_entry: &Vec<StorewatchEntryLinux>, rmta
         "gauge": gauge_array
     });
 
-    // agent_logger("debug", "generate_storage_gauge", 
-    //     r#"{
-    //             "message": "Storage Gauge JSON successfully generated."
-    //         }"#);
     gauge_json.to_string()
 }
 
 pub fn generate_agent_gauge(log_entry: &LogEntry, hostname: &str, rmtag: &str, timestamp: u64) -> String {
+    // Create dimensions object once
+    let dimensions = json!({
+        "host": hostname,
+        "environment": rmtag
+    });
+    
+    let timestamp_ms = timestamp * 1000;
+    
+    // Pre-allocate with exact capacity
+    let mut gauge_array = Vec::with_capacity(10);
     
     let metrics = [
         ("cpu_usage", log_entry.cpu_usage),
@@ -81,53 +94,50 @@ pub fn generate_agent_gauge(log_entry: &LogEntry, hostname: &str, rmtag: &str, t
         ("rx_dropped", log_entry.rx_dropped as f64),
     ];
 
-    let gauge_array: Vec<_> = metrics.iter().map(|(metric, value)| {
-        json!({
+    for (metric, value) in &metrics {
+        gauge_array.push(json!({
             "metric": metric,
             "value": value,
-            "dimensions": {
-                "host": hostname,
-                "environment": rmtag
-            },
-            "timestamp": timestamp * 1000
-        })
-    }).collect();
+            "dimensions": dimensions.clone(),
+            "timestamp": timestamp_ms
+        }));
+    }
 
-    serde_json::to_string(&json!({ "gauge": gauge_array })).unwrap_or_default()
+    // Use a static structure to avoid allocations
+    let gauge_obj = json!({ "gauge": gauge_array });
+    gauge_obj.to_string()
 }
 
 pub fn send_gauge(client: &Client, uri: &str, data_json: &str, token: Arc<Option<String>>, timeout: u64) -> Result<(), Error> {
+    // Get token value once
+    let token_value = match token.as_ref() {
+        Some(t) => t.as_str(),
+        None => return Ok(()) // Skip if no token available
+    };
     
     // Send the request
-    let response_result = client.post(uri.to_string())
+    let response_result = client.post(uri)
         .header("Content-Type", "application/json; charset=utf-8")
-        .header("X-SF-Token", <std::option::Option<std::string::String> as Clone>::clone(token.as_ref()).unwrap().as_str())
+        .header("X-SF-Token", token_value)
         .body(data_json.to_string())
         .timeout(Duration::from_secs(timeout))
         .send();
 
     match response_result {
         Ok(_) => {
-            agent_logger("debug", "signalfx","send_gauge", 
-            r#"{
-                    "message": "Data successfully sent."
-                }"#);
+            agent_logger("debug", "signalfx", "send_gauge", 
+                r#"{"message": "Data successfully sent."}"#);
             Ok(())
         },
         Err(e) => {
-            // Check if the error is a timeout
-            if e.is_timeout() {
-                agent_logger("error", "signalfx","send_gauge", 
-                r#"{
-                        "message": "Request timed out.",
-                        "error": "Timeout!"
-                    }"#);
-            } else {
-                agent_logger("error", "signalfx","send_gauge", 
-                r#"{
-                        "message": "Data could not be sent."
-                    }"#);
-            }
+            // Simplified error logging
+            let error_type = if e.is_timeout() { "timeout" } 
+                else if e.is_connect() { "connection" }
+                else { "request" };
+                
+            agent_logger("error", "signalfx", "send_gauge", 
+                &format!(r#"{{"message": "Failed to send data", "error_type": "{}", "error": "{}"}}"#, 
+                    error_type, e));
             Err(e)
         }
     }
