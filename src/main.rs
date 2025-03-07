@@ -222,24 +222,41 @@ fn main() {
                     .open(&agent_file)
                     .expect("Failed to open log file");
                 let mut log_writer = BufWriter::new(file);
+                
+                // Pre-allocate buffer to avoid repeated allocations
+                let mut json_buffer = Vec::with_capacity(4096);
+                
+                // Initialize system once
+                let mut system = System::new_all();
+                let mut networks = Networks::new_with_refreshed_list();
+                let sleep_duration = std::time::Duration::from_secs(1);
 
                 loop {
+                    // Reset buffer without deallocating memory
+                    json_buffer.clear();
+                    
                     log_entry.timestamp = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .expect("Time went backwards")
                         .as_secs();
                     log_entry.uptime = System::uptime();
-                    let mut system = System::new_all();
-                    let mut networks = Networks::new_with_refreshed_list();
+                    
+                    // Reset log entry data collectors before the interval
+                    log_entry.reset();
             
                     for _ in 0..interval {
-                        system.refresh_all();
+                        // Only refresh what we need
+                        system.refresh_cpu_all();
+                        system.refresh_memory();
+                        system.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, sysinfo::ProcessRefreshKind::everything());
                         networks.refresh(true);
+                        
                         log_entry.update(&system, &networks);
-                        std::thread::sleep(std::time::Duration::from_secs(1));
+                        std::thread::sleep(sleep_duration);
                     }
                     
                     log_entry.finalize(interval);
+
     
                     if let Some(client) = &signalfx_client {
                         let client_clone = Arc::clone(client);
@@ -255,20 +272,20 @@ fn main() {
                                 token_clone,
                                 3,
                             );
-
                         });
                     }
             
-                    log_entry.write_json(&mut log_writer).expect("Failed to write to log file");
-        
+                    // Use the pre-allocated buffer
+                    log_entry.write_json(&mut json_buffer).expect("Failed to serialize log entry");
+                    
+                    // Write the buffer to the log file
+                    log_writer.write_all(&json_buffer).expect("Failed to write to log file");
                     log_writer.write_all(b"\n").expect("Failed to write newline");
                     log_writer.flush().expect("Failed to flush log file");
-                    log_entry.reset();
             
                     modules::startup::check_stopswitch(&configmap.bin_folder);
                     modules::log_entry::check_log_file_size(agent_file.as_ref());
                 }
-
             }
             "tcp" => {
                 let tcp_host = configmap.host.clone();
@@ -387,25 +404,65 @@ fn main() {
             }
             "splunkapi" => {
                 let client = ClientBuilder::new()
-                .danger_accept_invalid_certs(true)
-                .timeout(std::time::Duration::from_secs(5))
-                .build()
-                .expect("Failed to build client");
-                let api_url = &configmap.api;
+                    .danger_accept_invalid_certs(true)
+                    .timeout(std::time::Duration::from_secs(5))
+                    .build()
+                    .expect("Failed to build client");
+                let api_url = configmap.api.clone();  // Clone to own the string
+                                
+                // Create owned copies of all parameters
+                let source = configmap.source.clone();
+                let sourcetype = configmap.sourcetype.clone();
+                let index = configmap.index.clone();
+                let hostname_copy = hostname.clone();
                 
-                let params = [
-                ("source", configmap.source.as_str()),
-                ("sourcetype", configmap.sourcetype.as_str()),
-                ("index", configmap.index.as_str()),
-                ("host", hostname.as_str()),
-                ];
-
+                // Create channel for non-blocking Splunk API calls
+                let (tx, rx) = std::sync::mpsc::channel::<(String, String, String, String, String, Vec<u8>)>();
+                
+                // Spawn a dedicated thread for handling Splunk API requests
+                let client_for_thread = client.clone();
+                std::thread::spawn(move || {
+                    while let Ok((url, source, sourcetype, index, host, data)) = rx.recv() {
+                        let params = [
+                            ("source", source.as_str()),
+                            ("sourcetype", sourcetype.as_str()),
+                            ("index", index.as_str()),
+                            ("host", host.as_str()),
+                        ];
+                        
+                        match client_for_thread.post(&url)
+                            .query(&params)
+                            .body(data)
+                            .send() 
+                        {
+                            Ok(_) => {},
+                            Err(err) => {
+                                let error_msg = if err.is_timeout() {
+                                    "Request timed out"
+                                } else if err.is_connect() {
+                                    "Connection error"
+                                } else {
+                                    "Error sending request"
+                                };
+                                
+                                modules::logging::agent_logger(
+                                    "error", 
+                                    "main_process", 
+                                    "splunkapi_agent",
+                                    &format!(r#"{{"message": "{}", "error": "{}"}}"#, error_msg, err)
+                                );
+                            }
+                        }
+                    }
+                });
+                
                 // Pre-allocate buffer to avoid repeated allocations
                 let mut json_buffer = Vec::with_capacity(4096);
                 
                 // Initialize system once
                 let mut system = System::new_all();
                 let mut networks = Networks::new_with_refreshed_list();
+                let sleep_duration = std::time::Duration::from_secs(1);
 
                 loop {
                     // Reset buffer without deallocating memory
@@ -419,7 +476,7 @@ fn main() {
                     
                     // Reset system data collectors before the interval
                     log_entry.reset();
-            
+
                     for _ in 0..interval {
                         // Only refresh what we need
                         system.refresh_cpu_all();
@@ -428,17 +485,17 @@ fn main() {
                         networks.refresh(true);
                         
                         log_entry.update(&system, &networks);
-                        std::thread::sleep(std::time::Duration::from_secs(1));
+                        std::thread::sleep(sleep_duration);
                     }
-        
+
                     log_entry.finalize(interval);
-    
+
                     if let Some(client) = &signalfx_client {
                         let client_clone = Arc::clone(client);
                         let uri_clone = Arc::clone(&signalfx_uri);
                         let token_clone = Arc::clone(&signalfx_token);
                         let gauge_json = modules::signalfx::generate_agent_gauge(&log_entry, &hostname, &configmap.rmtag, log_entry.timestamp);
-    
+
                         pool.execute(move || {
                             let _ = modules::signalfx::send_gauge(
                                 &client_clone,
@@ -452,34 +509,16 @@ fn main() {
                     
                     // Reuse the buffer
                     log_entry.write_json(&mut json_buffer).expect("Failed to serialize log entry");
-                    let payload = String::from_utf8_lossy(&json_buffer).to_string();
                     
-                    // Use a single match with fewer allocations
-                    match client.post(api_url)
-                        .query(&params)
-                        .body(payload)
-                        .send() 
-                    {
-                        Ok(_) => {},
-                        Err(err) => {
-                            let error_msg = if err.is_timeout() {
-                                "Request timed out"
-                            } else if err.is_connect() {
-                                "Connection error"
-                            } else {
-                                "Error sending request"
-                            };
-                            
-                            modules::logging::agent_logger(
-                                "error", 
-                                "main_process", 
-                                "splunkapi_agent",
-                                &format!(r#"{{"message": "{}", "error": "{}"}}"#, error_msg, err)
-                            );
-                        }
-                    }
-                    
-                    modules::startup::check_stopswitch(&configmap.bin_folder);
+                    // Send data through channel instead of direct API call
+                    let _ = tx.send((
+                        api_url.clone(),
+                        source.clone(), 
+                        sourcetype.clone(), 
+                        index.clone(), 
+                        hostname_copy.clone(), 
+                        json_buffer.clone()
+                    ));
                 }
             }
             "hec" => {
