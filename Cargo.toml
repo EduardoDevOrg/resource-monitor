@@ -22,7 +22,7 @@ serde = { version = "1.0.218", features = ["derive"] }
 pnet = "0.35.0"
 base64 = "0.22.1"
 if-addrs = "0.13.3"
-reqwest = { version = "0.12.12", features = ["blocking", "json"] }
+reqwest = { version = "0.12.12", features = ["blocking", "json", "rustls-tls"] }
 threadpool = "1.8.1"
 
 [target.x86_64-pc-windows-msvc.dependencies]
