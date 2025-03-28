@@ -52,33 +52,65 @@ impl StartupEntry {
     }
 }
 
+
 fn get_splunk_version(splunk_root: &Path) -> String {
+    // Construct the path to splunk.version based on the platform
+    #[cfg(target_os = "windows")]
+    let splunk_path = splunk_root.join("etc").join("splunk.version");
+    
+    #[cfg(not(target_os = "windows"))]
     let splunk_path = splunk_root.join("etc/splunk.version");
+    
     if splunk_path.exists() {
-        let version_contents = std::fs::read_to_string(&splunk_path).unwrap();
-        let version_line = version_contents.lines()
-            .find(|line| line.starts_with("VERSION="))
-            .unwrap_or("");
-        version_line.split('=').nth(1).unwrap_or("").to_string()
+        match std::fs::read_to_string(&splunk_path) {
+            Ok(version_contents) => {
+                let version_line = version_contents.lines()
+                    .find(|line| line.starts_with("VERSION="))
+                    .unwrap_or("");
+                version_line.split('=').nth(1).unwrap_or("").to_string()
+            },
+            Err(_) => String::from("unknown"),
+        }
     } else {
         String::from("non_splunk")
     }
 }
 
 fn get_instance_id(splunk_root: &Path) -> String {
+    // Construct the path to instance.cfg based on the platform
+    #[cfg(target_os = "windows")]
+    let instance_id_path = splunk_root.join("etc").join("instance.cfg");
+    
+    #[cfg(not(target_os = "windows"))]
     let instance_id_path = splunk_root.join("etc/instance.cfg");
+    
     if instance_id_path.exists() {
-        let instance_id_content = std::fs::read_to_string(&instance_id_path).unwrap();
-        for line in instance_id_content.lines() {
-            if line.trim().starts_with("guid =") {
-                return line.split('=').nth(1).unwrap().trim().to_string();
+        match std::fs::read_to_string(&instance_id_path) {
+            Ok(instance_id_content) => {
+                for line in instance_id_content.lines() {
+                    if line.trim().starts_with("guid =") {
+                        if let Some(guid) = line.split('=').nth(1) {
+                            return guid.trim().to_string();
+                        }
+                    }
+                }
+                // Log error if no GUID found
+                agent_logger("error", "startup", "get_instance_id",
+                r#"{
+                    "message": "No instance ID found in instance.cfg"
+                }"#);
+                String::from("non_splunk")
+            },
+            Err(e) => {
+                // Log error if can't read the file
+                agent_logger("error", "startup", "get_instance_id",
+                &format!(r#"{{
+                    "message": "Failed to read instance.cfg",
+                    "error": "{}"
+                }}"#, e));
+                String::from("unknown")
             }
         }
-        agent_logger("error", "startup", "get_instance_id",
-        r#"{
-                "message": "No instance ID found in instance.cfg"
-            }"#);
-        String::from("non_splunk")
     } else {
         String::from("non_splunk")
     }
@@ -115,7 +147,7 @@ pub fn startup_log(hostname: &str, app_folder: &Path) -> Result<StartupEntry, Bo
             }"#);
     let splunk_root;
     let mut is_splunk = false;
-    let app_folder_str = app_folder.to_string_lossy();
+    let app_folder_str = app_folder.to_string_lossy().to_lowercase();
     if ["splunk", "splunkforwarder", "splunkuniversalforwarder"]
         .iter()
         .any(|&s| app_folder_str.contains(s))

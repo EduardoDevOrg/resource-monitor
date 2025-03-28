@@ -18,10 +18,14 @@ pub struct LogEntry<'a> {
     pub bytes_out: u64,
     pub packets_in: u64,
     pub packets_out: u64,
+    #[cfg(not(target_os = "windows"))]
     pub tx_dropped: u64,
+    #[cfg(not(target_os = "windows"))]
     pub rx_dropped: u64,
+    #[cfg(not(target_os = "windows"))]
     #[serde(skip_serializing)]
     pub tx_dropped_baseline: u64,
+    #[cfg(not(target_os = "windows"))]
     #[serde(skip_serializing)]
     pub rx_dropped_baseline: u64,
     pub hostname: &'a str,
@@ -55,9 +59,13 @@ impl<'a> LogEntry<'a> {
             bytes_out: 0,
             packets_in: 0,
             packets_out: 0,
+            #[cfg(not(target_os = "windows"))]
             tx_dropped: 0,
+            #[cfg(not(target_os = "windows"))]
             rx_dropped: 0,
+            #[cfg(not(target_os = "windows"))]
             tx_dropped_baseline: 0,
+            #[cfg(not(target_os = "windows"))]
             rx_dropped_baseline: 0,
             uptime: 0,
             hostname,
@@ -66,6 +74,8 @@ impl<'a> LogEntry<'a> {
         }
     }
 
+    // Only compile this method for Unix-based systems
+    #[cfg(not(target_os = "windows"))]
     pub fn calculate_baseline(&mut self, networks: &Networks) {
         let mut tx_dropped_path = String::with_capacity(64);
         let mut rx_dropped_path = String::with_capacity(64);
@@ -96,19 +106,55 @@ impl<'a> LogEntry<'a> {
         }
     }
 
+    // Empty implementation for Windows
+    #[cfg(target_os = "windows")]
+    pub fn calculate_baseline(&mut self, _networks: &Networks) {
+        // No-op for Windows as we don't track dropped packets
+    }
+
     pub fn update(&mut self, system: &System, networks: &Networks) {
+        // Common network statistics for all platforms
+        for (_, network) in networks.iter() {
+            self.bytes_in += network.received();
+            self.bytes_out += network.transmitted();
+            self.packets_in += network.packets_received();
+            self.packets_out += network.packets_transmitted();
+        }
+
+        // Platform-specific dropped packet handling
+        #[cfg(not(target_os = "windows"))]
+        self.update_dropped_packets(networks);
+
+        // Disk usage calculation
+        let mut total_disk_read = 0;
+        let mut total_disk_write = 0;
+        
+        for process in system.processes().values() {
+            let disk_usage = process.disk_usage();
+            total_disk_read += disk_usage.read_bytes;
+            total_disk_write += disk_usage.written_bytes;
+        }
+        
+        self.disk_read += total_disk_read;
+        self.disk_write += total_disk_write;
+
+        // CPU and memory usage
+        self.cpu_usage += system.global_cpu_usage() as f64;
+        self.total_mem = system.total_memory();
+        self.used_mem = system.used_memory();
+        self.mem_usage += self.used_mem as f64 / self.total_mem as f64 * 100.0;
+    }
+
+    // Helper method for Unix-based systems to update dropped packet counts
+    #[cfg(not(target_os = "windows"))]
+    fn update_dropped_packets(&mut self, networks: &Networks) {
         let mut total_tx_dropped = 0;
         let mut total_rx_dropped = 0;
         
         let mut tx_dropped_path = String::with_capacity(64);
         let mut rx_dropped_path = String::with_capacity(64);
 
-        for (interface_name, network) in networks.iter() {
-            self.bytes_in += network.received();
-            self.bytes_out += network.transmitted();
-            self.packets_in += network.packets_received();
-            self.packets_out += network.packets_transmitted();
-
+        for (interface_name, _) in networks.iter() {
             tx_dropped_path.clear();
             rx_dropped_path.clear();
             
@@ -137,23 +183,6 @@ impl<'a> LogEntry<'a> {
         self.rx_dropped += total_rx_dropped.saturating_sub(self.rx_dropped_baseline);
         self.tx_dropped_baseline = total_tx_dropped;
         self.rx_dropped_baseline = total_rx_dropped;
-
-        let mut total_disk_read = 0;
-        let mut total_disk_write = 0;
-        
-        for process in system.processes().values() {
-            let disk_usage = process.disk_usage();
-            total_disk_read += disk_usage.read_bytes;
-            total_disk_write += disk_usage.written_bytes;
-        }
-        
-        self.disk_read += total_disk_read;
-        self.disk_write += total_disk_write;
-
-        self.cpu_usage += system.global_cpu_usage() as f64;
-        self.total_mem = system.total_memory();
-        self.used_mem = system.used_memory();
-        self.mem_usage += self.used_mem as f64 / self.total_mem as f64 * 100.0;
     }
 
     pub fn finalize(&mut self, sample_count: u64) {
@@ -171,6 +200,12 @@ impl<'a> LogEntry<'a> {
         self.packets_out /= sample_count;
         self.disk_read /= sample_count;
         self.disk_write /= sample_count;
+        
+        #[cfg(not(target_os = "windows"))]
+        {
+            self.tx_dropped /= sample_count;
+            self.rx_dropped /= sample_count;
+        }
     }
 
     pub fn reset(&mut self) {
@@ -182,8 +217,12 @@ impl<'a> LogEntry<'a> {
         self.packets_out = 0;
         self.disk_read = 0;
         self.disk_write = 0;
-        self.tx_dropped = 0;
-        self.rx_dropped = 0;
+        
+        #[cfg(not(target_os = "windows"))]
+        {
+            self.tx_dropped = 0;
+            self.rx_dropped = 0;
+        }
     }
 
     pub fn write_json<W: Write>(&self, writer: W) -> serde_json::Result<()> {
@@ -212,6 +251,7 @@ impl<'a> LogEntry<'a> {
 
 const LOG_FILE_SIZE_LIMIT: u64 = 10 * 1024 * 1024;
 
+// This function works the same way on both platforms
 pub fn check_log_file_size(log_path: &Path) {
     match fs::metadata(log_path) {
         Ok(metadata) => {
