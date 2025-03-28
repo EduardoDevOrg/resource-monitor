@@ -519,6 +519,7 @@ fn main() {
                         hostname_copy.clone(), 
                         json_buffer.clone()
                     ));
+                    modules::startup::check_stopswitch(&configmap.bin_folder);
                 }
             }
             "hec" => {
@@ -543,7 +544,7 @@ fn main() {
                 .open(storewatch_file)
                 .expect("Failed to open storewatch log file");
 
-                let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
+                let storewatch_entry = modules::storewatch::get_storage(&hostname);
                     
                 for entry in &storewatch_entry {
                     let json_string = serde_json::to_string(&entry).expect("Failed to serialize storewatch entry");
@@ -573,7 +574,7 @@ fn main() {
                 let tcp_address = format!("{}:{}", tcp_host, tcp_port);
                 let mut stream = TcpStream::connect(tcp_address).expect("Failed to connect to TCP server");
 
-                let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
+                let storewatch_entry = modules::storewatch::get_storage(&hostname);
                     
                     if add_wrapper {
                         for entry in &storewatch_entry {
@@ -619,7 +620,7 @@ fn main() {
                     .next()
                     .expect("No addresses found for hostname");
 
-                let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
+                let storewatch_entry = modules::storewatch::get_storage(&hostname);
                 
                 if add_wrapper {
                     for entry in &storewatch_entry {
@@ -668,7 +669,7 @@ fn main() {
                 ("host", hostname.as_str()),
                 ];
 
-            let storewatch_entry = modules::storewatch::get_storage_linux(&hostname);
+            let storewatch_entry = modules::storewatch::get_storage(&hostname);
                 
                 for entry in &storewatch_entry {
                     

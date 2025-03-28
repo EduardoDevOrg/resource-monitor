@@ -1,9 +1,37 @@
 use std::collections::HashMap;
-
 use serde::{Serialize, Deserialize};
 use sysinfo::Disks;
-use super::diskstats;
 use super::logging::agent_logger;
+#[cfg(target_os = "linux")]
+use super::diskstats;
+
+// Platform-agnostic StorewatchEntry trait
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(tag = "platform")]
+pub enum StorewatchEntry {
+    #[serde(rename = "linux")]
+    Linux(StorewatchEntryLinux),
+    #[serde(rename = "windows")]
+    Windows(StorewatchEntryWindows),
+}
+
+impl StorewatchEntry {
+    pub fn add_wrapper(&self, index: &str, source: &str, sourcetype: &str, host: String) -> String {
+        let entry_json = serde_json::to_string(self).expect("Failed to serialize entry");
+
+        let wrapper = serde_json::json!({
+            "index": index,
+            "source": source,
+            "sourcetype": sourcetype,
+            "host": host,
+            "event": serde_json::from_str::<serde_json::Value>(&entry_json).expect("Failed to parse log entry JSON")
+        });
+
+        serde_json::to_string(&wrapper).expect("Failed to serialize wrapped log entry")
+    }
+}
+
+// Linux-specific implementation (existing code)
 #[derive(Serialize, Deserialize, Debug)]
 pub struct StorewatchEntryLinux {
     pub timestamp: u64,
@@ -27,11 +55,12 @@ pub struct StorewatchEntryLinux {
 }
 
 impl StorewatchEntryLinux {
-    pub fn new_linux(hostname: String) -> Self {
+    #[allow(dead_code)]
+    pub fn new(hostname: String) -> Self {
         StorewatchEntryLinux {
             timestamp: 0,
             hostname,   
-            component:"storage_watcher".to_string(),
+            component: "storage_watcher".to_string(),
             disk_name: "".to_string(),
             mounts: Vec::new(),
             total_size: 0,
@@ -49,37 +78,80 @@ impl StorewatchEntryLinux {
             bytes_written: 0,
         }
     }
+}
 
-    pub fn add_wrapper(&self, index: &str, source: &str, sourcetype: &str, host: String) -> String {
-        let storewatch_entry_json = serde_json::to_string(self).expect("Failed to serialize startup entry");
+// Windows-specific implementation with reduced fields
+#[derive(Serialize, Deserialize, Debug)]
+pub struct StorewatchEntryWindows {
+    pub timestamp: u64,
+    pub hostname: String,
+    pub component: String,
+    pub disk_name: String,
+    pub partitions: Vec<String>, // "mounts" renamed to "partitions" for Windows
+    pub total_size: u64,
+    pub free_size: u64,
+    pub used_size: u64,
+    pub bytes_read: u64,
+    pub bytes_written: u64,
+}
 
-        let wrapper = serde_json::json!({
-            "index": index,
-            "source": source,
-            "sourcetype": sourcetype,
-            "host": host,
-            "event": serde_json::from_str::<serde_json::Value>(&storewatch_entry_json).expect("Failed to parse log entry JSON")
-        });
-
-        serde_json::to_string(&wrapper).expect("Failed to serialize wrapped log entry")
+impl StorewatchEntryWindows {
+    #[allow(dead_code)]
+    pub fn new(hostname: String) -> Self {
+        StorewatchEntryWindows {
+            timestamp: 0,
+            hostname,   
+            component: "storage_watcher".to_string(),
+            disk_name: "".to_string(),
+            partitions: Vec::new(),
+            total_size: 0,
+            free_size: 0,
+            used_size: 0,
+            bytes_read: 0,
+            bytes_written: 0,
+        }
     }
 }
 
+// Cross-platform function to get storage information
+pub fn get_storage(hostname: &str) -> Vec<StorewatchEntry> {
+    #[cfg(target_os = "linux")]
+    {
+        get_storage_linux(hostname)
+            .into_iter()
+            .map(StorewatchEntry::Linux)
+            .collect()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        get_storage_windows(hostname)
+            .into_iter()
+            .map(StorewatchEntry::Windows)
+            .collect()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        agent_logger("error", "storewatch", "get_storage",
+            r#"{
+                "message": "Unsupported operating system"
+            }"#
+        );
+        Vec::new()
+    }
+}
+
+// Linux implementation (existing code)
+#[cfg(target_os = "linux")]
 pub fn get_storage_linux(hostname: &str) -> Vec<StorewatchEntryLinux> {
     let mut disk_stats_collection: HashMap<String, Vec<diskstats::DiskStat>> = HashMap::new();
     let mut disk_info_collection: HashMap<String, Vec<(u64, u64, u64, f64)>> = HashMap::new();
     let mut disk_data = Disks::new_with_refreshed_list();
     if disk_data.list().is_empty() {
         agent_logger("error", "storewatch", "get_storage_linux",
-    r#"{
-        "message": "Failed to retrieve disk data"
-    }"#
-    );
-    } else {
-        agent_logger("info", "storewatch", "get_storage_linux",
-    r#"{
-        "message": "Successfully retrieved disk data."
-    }"#);
+            r#"{
+                "message": "Failed to retrieve disk data"
+            }"#
+        );
     }
 
     for i in 0..11 {  // We now collect 11 samples to calculate 10 differences
@@ -116,7 +188,7 @@ pub fn get_storage_linux(hostname: &str) -> Vec<StorewatchEntryLinux> {
     let mut storage_entries = Vec::new();
 
     for (disk_name, disk_info) in disk_info_collection.iter() {
-        let mut storage_entry = StorewatchEntryLinux::new_linux(hostname.to_string());
+        let mut storage_entry = StorewatchEntryLinux::new(hostname.to_string());
         storage_entry.timestamp = timestamp_epoch;
         storage_entry.disk_name = disk_name.clone();
 
@@ -176,4 +248,111 @@ pub fn get_storage_linux(hostname: &str) -> Vec<StorewatchEntryLinux> {
         storage_entries.push(storage_entry);
     }
     storage_entries     
+}
+
+// Windows implementation
+#[cfg(target_os = "windows")]
+pub fn get_storage_windows(hostname: &str) -> Vec<StorewatchEntryWindows> {
+    let mut disk_info_collection: HashMap<String, Vec<(u64, u64, u64)>> = HashMap::new();
+    let mut disk_io_collection: HashMap<String, Vec<(u64, u64)>> = HashMap::new();
+    let mut disk_data = Disks::new_with_refreshed_list();
+    
+    if disk_data.list().is_empty() {
+        agent_logger("error", "storewatch", "get_storage_windows",
+            r#"{
+                "message": "Failed to retrieve disk data"
+            }"#
+        );
+    }
+
+    for i in 0..11 {  // Collect 11 samples to calculate 10 differences
+        disk_data.refresh(true);
+        let disks = disk_data.list();
+        
+        for disk in disks {
+            let disk_name = disk.name().to_string_lossy().to_string();
+            let total_size = disk.total_space();
+            let free_size = disk.available_space();
+            let used_size = total_size - free_size;
+            
+            disk_info_collection.entry(disk_name.clone())
+                .or_default()
+                .push((total_size, free_size, used_size));
+            
+            // For Windows, get the disk I/O using windows-specific APIs
+            // We'll use the sysinfo's disk usage which gives read/write bytes
+            let (read_bytes, written_bytes) = get_windows_disk_io(&disk_name);
+            disk_io_collection.entry(disk_name.clone())
+                .or_default()
+                .push((read_bytes, written_bytes));
+        }
+        
+        if i < 10 {  // Don't sleep after the last iteration
+            std::thread::sleep(std::time::Duration::from_millis(990));
+        }
+    }
+    
+    let timestamp_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("Time went backwards")
+        .as_secs();
+    
+    let mut storage_entries = Vec::new();
+    
+    for (disk_name, disk_info) in disk_info_collection.iter() {
+        let mut storage_entry = StorewatchEntryWindows::new(hostname.to_string());
+        storage_entry.timestamp = timestamp_epoch;
+        storage_entry.disk_name = disk_name.clone();
+        
+        // Calculate averages
+        let info_len = disk_info.len() as u64;
+        storage_entry.total_size = disk_info.iter().map(|&(total, _, _)| total).sum::<u64>() / info_len;
+        storage_entry.free_size = disk_info.iter().map(|&(_, free, _)| free).sum::<u64>() / info_len;
+        storage_entry.used_size = disk_info.iter().map(|&(_, _, used)| used).sum::<u64>() / info_len;
+        
+        // Get the drive letter or partition info
+        if let Some(last_disk) = disk_data.list().iter().find(|d| d.name().to_string_lossy() == *disk_name) {
+            storage_entry.partitions.push(last_disk.mount_point().to_string_lossy().to_string());
+        }
+        
+        // Calculate disk I/O bytes read/written if available
+        if let Some(io_stats) = disk_io_collection.get(disk_name) {
+            if io_stats.len() > 1 {
+                let mut total_bytes_read = 0;
+                let mut total_bytes_written = 0;
+                
+                for i in 1..io_stats.len() {
+                    let prev = &io_stats[i-1];
+                    let curr = &io_stats[i];
+                    total_bytes_read += curr.0.saturating_sub(prev.0);
+                    total_bytes_written += curr.1.saturating_sub(prev.1);
+                }
+                
+                let samples = (io_stats.len() - 1) as u64;
+                storage_entry.bytes_read = total_bytes_read / samples;
+                storage_entry.bytes_written = total_bytes_written / samples;
+            }
+        }
+        
+        storage_entries.push(storage_entry);
+    }
+    
+    storage_entries
+}
+
+#[cfg(target_os = "windows")]
+fn get_windows_disk_io(_disk_name: &str) -> (u64, u64) {
+    // This is a placeholder. In a real implementation, you would use
+    // Windows Performance Counters or other Windows-specific APIs to get disk I/O stats.
+    // 
+    // For example, you might use the windows crate to access the Windows API:
+    // - CreateFile to open a handle to the physical drive
+    // - DeviceIoControl with IOCTL_DISK_PERFORMANCE to get performance data
+    // 
+    // Or use libraries like windows-rs/winapi that expose Performance Counter APIs:
+    // - PdhOpenQuery, PdhAddCounter for "PhysicalDisk" counters
+    
+    // For demonstration purposes, we're returning default values
+    // In a real implementation, replace this with actual Windows API calls
+    (0, 0)
 }

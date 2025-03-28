@@ -1,3 +1,4 @@
+#[cfg(target_os = "linux")]
 use std::{fs::{self, File}, io::{BufRead, BufReader, Error, ErrorKind}, path::Path};
 use serde::{Serialize, Deserialize};
 
@@ -28,7 +29,7 @@ pub struct DiskStat {
 }
 
 
-
+#[cfg(target_os = "linux")]
 pub fn read_current() -> Vec<DiskStat> {
     let mut disk_stats = Vec::new();
     let diskstats = "/proc/diskstats";
@@ -47,6 +48,7 @@ pub fn read_current() -> Vec<DiskStat> {
     disk_stats
 }
 
+#[cfg(target_os = "linux")]
 pub fn get_sector_size(disk_name: &str) -> Result<u64, Error> {
     let sys_block_dir = "/sys/block/";
     let mut path = Path::new(sys_block_dir);
@@ -65,6 +67,7 @@ pub fn get_sector_size(disk_name: &str) -> Result<u64, Error> {
     Ok(sector_size)
 }
 
+#[cfg(target_os = "linux")]
 impl DiskStat {
     pub fn from_line(line: &str) -> Result<DiskStat, Error> {
         let mut parts = line.split_whitespace();
