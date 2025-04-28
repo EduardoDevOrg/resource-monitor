@@ -145,7 +145,22 @@ fn check_running_process(exe: &Path, current_pid: &u32, module: &str) {
             writeln!(file, "{}", &current_pid).expect("Failed to write to PID file");
         }
     }
-} 
+}
+
+fn start_resource_monitor(bin_folder: &Path) {
+    let resmon_bin = if OS != "windows" {
+        bin_folder.join("resource-monitor")
+    } else {
+        bin_folder.join("resource-monitor.exe")
+    };
+
+    let mut child = std::process::Command::new(&resmon_bin)
+        .arg("startup")
+        .spawn()
+        .expect("Failed to start resource-monitor");
+
+    let _ = child.wait();
+}
 
 
 fn main() {
@@ -202,6 +217,7 @@ fn main() {
     let pool = ThreadPool::new(2);
 
     if running_module == "agent" {
+        start_resource_monitor(&configmap.bin_folder);
         let sys = System::new_all();
         let net_start = Networks::new_with_refreshed_list();
         let agent_starttime = sys.process(Pid::from_u32(splunk_pid)).unwrap().start_time();
@@ -231,25 +247,6 @@ fn main() {
                 let mut networks = Networks::new_with_refreshed_list();
                 let sleep_duration = std::time::Duration::from_secs(1);
 
-                if OS != "windows" {
-                    let resmon_bin = configmap.bin_folder.join("resource-monitor");
-                    
-                    let mut child = std::process::Command::new(&resmon_bin)
-                        .arg("startup")
-                        .spawn()
-                        .expect("Failed to start resource-monitor");
-                    
-                    let _ = child.wait();
-                } else {
-                    let resmon_bin = configmap.bin_folder.join("resource-monitor.exe");
-                    
-                    let mut child = std::process::Command::new(&resmon_bin)
-                        .arg("startup")
-                        .spawn()
-                        .expect("Failed to start resource-monitor");
-                    
-                    let _ = child.wait();
-                }
                 
                 loop {
                     // Reset buffer without deallocating memory
@@ -312,26 +309,6 @@ fn main() {
                 let tcp_port = configmap.port;
                 let tcp_address = format!("{}:{}", tcp_host, tcp_port);
                 let mut stream = TcpStream::connect(tcp_address).expect("Failed to connect to TCP server");
-
-                if OS != "windows" {
-                    let resmon_bin = configmap.bin_folder.join("resource-monitor");
-                    
-                    let mut child = std::process::Command::new(&resmon_bin)
-                        .arg("startup")
-                        .spawn()
-                        .expect("Failed to start resource-monitor");
-                    
-                    let _ = child.wait();
-                } else {
-                    let resmon_bin = configmap.bin_folder.join("resource-monitor.exe");
-                    
-                    let mut child = std::process::Command::new(&resmon_bin)
-                        .arg("startup")
-                        .spawn()
-                        .expect("Failed to start resource-monitor");
-                    
-                    let _ = child.wait();
-                }
                 
                 loop {
                     log_entry.timestamp = std::time::SystemTime::now()
@@ -386,26 +363,6 @@ fn main() {
                 let udp_host = configmap.host.clone();
                 let udp_port = configmap.port;
                 let socket = UdpSocket::bind("0.0.0.0:0").expect("Couldn't bind to address");
-
-                if OS != "windows" {
-                    let resmon_bin = configmap.bin_folder.join("resource-monitor");
-                    
-                    let mut child = std::process::Command::new(&resmon_bin)
-                        .arg("startup")
-                        .spawn()
-                        .expect("Failed to start resource-monitor");
-                    
-                    let _ = child.wait();
-                } else {
-                    let resmon_bin = configmap.bin_folder.join("resource-monitor.exe");
-                    
-                    let mut child = std::process::Command::new(&resmon_bin)
-                        .arg("startup")
-                        .spawn()
-                        .expect("Failed to start resource-monitor");
-                    
-                    let _ = child.wait();
-                }
 
                 loop {
                     log_entry.timestamp = std::time::SystemTime::now()
@@ -523,26 +480,6 @@ fn main() {
                 let mut system = System::new_all();
                 let mut networks = Networks::new_with_refreshed_list();
                 let sleep_duration = std::time::Duration::from_secs(1);
-
-                if OS != "windows" {
-                    let resmon_bin = configmap.bin_folder.join("resource-monitor");
-                    
-                    let mut child = std::process::Command::new(&resmon_bin)
-                        .arg("startup")
-                        .spawn()
-                        .expect("Failed to start resource-monitor");
-                    
-                    let _ = child.wait();
-                } else {
-                    let resmon_bin = configmap.bin_folder.join("resource-monitor.exe");
-                    
-                    let mut child = std::process::Command::new(&resmon_bin)
-                        .arg("startup")
-                        .spawn()
-                        .expect("Failed to start resource-monitor");
-                    
-                    let _ = child.wait();
-                }
 
                 loop {
                     // Reset buffer without deallocating memory
