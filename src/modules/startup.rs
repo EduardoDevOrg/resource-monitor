@@ -180,12 +180,11 @@ pub fn startup_log(hostname: &str, app_folder: &Path) -> Result<StartupEntry, Bo
     startup_entry.mem_total = sys.total_memory();
 
     if is_splunk {
-        let app_path = app_folder.join("bin");
         agent_logger(
             "INFO", "startup", "startup_log", r#"{
                 "message": "Startup_log completed successfully. Stopswitch file created."
             }"#);
-        create_stopswitch(&app_path);
+        create_stopswitch(&app_folder);
     }
 
     Ok(startup_entry)
